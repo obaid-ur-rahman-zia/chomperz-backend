@@ -30,6 +30,11 @@ export function calculatePowerMultiplier(powerLvl: number): number {
   return Math.pow(1.015, powerLvl);
 }
 
+/** Z-Coin cost to upgrade from current level → next level */
+export function getUpgradeCost(level: number): number {
+  return Math.ceil(Math.pow(1.065, level));
+}
+
 export function rarityFromTokenRank(rank: number): RarityTier {
   if (rank <= 100) return "legendary";
   if (rank <= 1000) return "rare";

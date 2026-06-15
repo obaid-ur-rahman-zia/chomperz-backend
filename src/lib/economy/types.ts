@@ -35,7 +35,7 @@ export const PLOT_NAMES: Record<number, string> = {
   7: "Crystal Crater",
   8: "Primeval Peak",
   9: "Legend's Lair",
-  12: "The Overgrowth Zone",
+  11: "The Overgrowth Zone",
 };
 
 export function getPlotName(plotId: number): string {

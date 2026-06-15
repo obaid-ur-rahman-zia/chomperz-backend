@@ -13,4 +13,4 @@ const earned = calculateOfflineEarnings(
   new Date(Date.now() - 24 * 60 * 60 * 1000)
 );
 console.log("24h offline earnings:", earned.toFixed(4));
-console.log("✓ Economy smoke tests passed");
+console.log("Economy smoke tests passed");

@@ -13,6 +13,8 @@ export interface IPlayer extends Document {
   cachedNftCount: number;
   cachedRaritySum: number;
   cachedTokenIds: number[];
+  ownedFurniture: string[];
+  cribLayout: { itemId: string; x: number; y: number }[];
 }
 
 const PlayerSchema = new Schema<IPlayer>(
@@ -35,6 +37,18 @@ const PlayerSchema = new Schema<IPlayer>(
     cachedNftCount: { type: Number, default: 0 },
     cachedRaritySum: { type: Number, default: 0 },
     cachedTokenIds: { type: [Number], default: [] },
+    ownedFurniture: { type: [String], default: [] },
+    cribLayout: {
+      type: [
+        {
+          itemId: String,
+          x: Number,
+          y: Number,
+          _id: false,
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );

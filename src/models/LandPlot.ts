@@ -3,6 +3,7 @@ import type { PlotStatus } from "../lib/economy";
 
 export interface IRenter {
   walletAddress: string;
+  twitterHandle: string;
   dailyBid: number;
   escrowBalance: number;
 }
@@ -13,6 +14,8 @@ export interface ILandPlot extends Document {
   legendaryTokenId: number | null;
   name: string;
   ownerWallet: string | null;
+  landlordHandle: string | null;
+  landlordAvatarUrl: string | null;
   status: PlotStatus;
   renters: IRenter[];
 }
@@ -20,6 +23,7 @@ export interface ILandPlot extends Document {
 const RenterSchema = new Schema<IRenter>(
   {
     walletAddress: { type: String, required: true },
+    twitterHandle: { type: String, default: "" },
     dailyBid: { type: Number, required: true },
     escrowBalance: { type: Number, required: true },
   },
@@ -32,6 +36,8 @@ const LandPlotSchema = new Schema<ILandPlot>({
   legendaryTokenId: { type: Number, default: null },
   name: { type: String, required: true },
   ownerWallet: { type: String, default: null, lowercase: true },
+  landlordHandle: { type: String, default: null },
+  landlordAvatarUrl: { type: String, default: null },
   status: {
     type: String,
     enum: ["unclaimed", "owned", "abandoned"],
