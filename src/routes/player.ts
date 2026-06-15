@@ -16,7 +16,7 @@ function serializePlayer(
     id: player._id,
     twitterHandle: player.twitterHandle,
     profilePicUrl: player.profilePicUrl,
-    walletAddress: player.walletAddress,
+    walletAddress: player.walletAddress ?? null,
     zCoins: player.zCoins,
     powerLvl: player.powerLvl,
     speedLvl: player.speedLvl,

@@ -182,18 +182,17 @@ router.get("/twitter/callback", async (req: Request, res: Response) => {
     }
 
     const { id: twitterId, username, profile_image_url } = profile;
-    let player = await Player.findOne({ twitterId });
-    if (!player) {
-      player = await Player.create({
-        twitterId,
-        twitterHandle: `@${username}`,
-        profilePicUrl: profile_image_url || "",
-      });
-    } else {
-      player.twitterHandle = `@${username}`;
-      player.profilePicUrl = profile_image_url || player.profilePicUrl;
-      await player.save();
-    }
+    const player = await Player.findOneAndUpdate(
+      { twitterId },
+      {
+        $set: {
+          twitterHandle: `@${username}`,
+          profilePicUrl: profile_image_url || "",
+        },
+        $setOnInsert: { twitterId },
+      },
+      { upsert: true, new: true, runValidators: true }
+    );
     const jwt = signToken({
       playerId: player._id.toString(),
       twitterId: player.twitterId,
@@ -203,7 +202,11 @@ router.get("/twitter/callback", async (req: Request, res: Response) => {
     res.redirect(`${webUrl}/auth/callback#token=${jwt}`);
   } catch (err) {
     console.error("Twitter callback error:", err);
-    res.redirect(loginRedirect(webUrl, "server_error"));
+    const detail =
+      err instanceof Error
+        ? err.message
+        : "unknown";
+    res.redirect(loginRedirect(webUrl, "server_error", detail));
   }
 });
 
@@ -259,11 +262,20 @@ router.post("/disconnect-wallet", requireAuth, async (req: Request, res: Respons
     res.status(404).json({ error: "Player not found" });
     return;
   }
-  player.walletAddress = null;
   player.cachedNftCount = 0;
   player.cachedTokenIds = [];
   player.cachedRaritySum = 0;
-  await player.save();
+  await Player.updateOne(
+    { _id: player._id },
+    {
+      $unset: { walletAddress: 1 },
+      $set: {
+        cachedNftCount: 0,
+        cachedTokenIds: [],
+        cachedRaritySum: 0,
+      },
+    }
+  );
   res.json({ success: true });
 });
 

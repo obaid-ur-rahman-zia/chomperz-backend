@@ -1,5 +1,17 @@
 import { LandPlot } from "../models/LandPlot";
+import { Player } from "../models/Player";
 import { getPlotName } from "../lib/economy";
+
+/** Sparse unique index allows only one doc with walletAddress: null — unset stale nulls. */
+export async function fixPlayerWalletIndex(): Promise<void> {
+  const result = await Player.updateMany(
+    { $or: [{ walletAddress: null }, { walletAddress: "" }] },
+    { $unset: { walletAddress: 1 } }
+  );
+  if (result.modifiedCount > 0) {
+    console.log(`Cleared null walletAddress on ${result.modifiedCount} player(s)`);
+  }
+}
 
 export async function seedLandPlots(): Promise<void> {
   const count = await LandPlot.countDocuments();

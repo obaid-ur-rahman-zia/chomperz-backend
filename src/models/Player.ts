@@ -24,7 +24,6 @@ const PlayerSchema = new Schema<IPlayer>(
     profilePicUrl: { type: String, default: "" },
     walletAddress: {
       type: String,
-      default: null,
       lowercase: true,
       sparse: true,
       unique: true,

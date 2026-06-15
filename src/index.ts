@@ -7,7 +7,7 @@ if (process.env.VERCEL !== "1") {
 
 import mongoose from "mongoose";
 import { createApp } from "./app";
-import { seedLandPlots } from "./db/seed";
+import { fixPlayerWalletIndex, seedLandPlots } from "./db/seed";
 
 type MongooseCache = {
   conn: typeof mongoose | null;
@@ -37,6 +37,7 @@ export function ensureDb(): Promise<void> {
         }
 
         cached.conn = await cached.promise;
+        await fixPlayerWalletIndex();
         await seedLandPlots();
       })();
     }
