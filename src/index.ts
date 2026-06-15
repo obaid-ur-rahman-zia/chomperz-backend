@@ -1,11 +1,22 @@
 import dotenv from "dotenv";
 import path from "path";
 
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+if (process.env.VERCEL !== "1") {
+  dotenv.config({ path: path.resolve(__dirname, "../.env") });
+}
 
 import mongoose from "mongoose";
 import { createApp } from "./app";
 import { seedLandPlots } from "./db/seed";
+
+type MongooseCache = {
+  conn: typeof mongoose | null;
+  promise: Promise<typeof mongoose> | null;
+};
+
+const globalCache = globalThis as typeof globalThis & {
+  __chomperzMongoose?: MongooseCache;
+};
 
 let dbReady: Promise<void> | null = null;
 
@@ -15,9 +26,19 @@ export function ensureDb(): Promise<void> {
     if (!mongoUri) {
       dbReady = Promise.reject(new Error("MONGODB_URI is required"));
     } else {
-      dbReady = mongoose.connect(mongoUri).then(async () => {
+      dbReady = (async () => {
+        const cached = globalCache.__chomperzMongoose ?? { conn: null, promise: null };
+        globalCache.__chomperzMongoose = cached;
+
+        if (cached.conn) return;
+
+        if (!cached.promise) {
+          cached.promise = mongoose.connect(mongoUri);
+        }
+
+        cached.conn = await cached.promise;
         await seedLandPlots();
-      });
+      })();
     }
   }
   return dbReady;

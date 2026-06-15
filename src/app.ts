@@ -9,10 +9,14 @@ import plotsRoutes from "./routes/plots";
 export function createApp(ensureDb: () => Promise<void>): express.Application {
   const app = express();
   const webUrl = process.env.WEB_URL || "http://localhost:3000";
+  const extraOrigins = (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
 
   app.use(
     cors({
-      origin: [webUrl, "http://localhost:3000", "http://127.0.0.1:3000"],
+      origin: [webUrl, "http://localhost:3000", "http://127.0.0.1:3000", ...extraOrigins],
       credentials: true,
     })
   );
