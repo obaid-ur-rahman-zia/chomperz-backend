@@ -24,9 +24,45 @@ function generateCodeChallenge(verifier: string): string {
 function loginRedirect(webUrl: string, error: string, detail?: string): string {
   const params = new URLSearchParams({ error });
   if (detail) {
-    params.set("error_detail", detail.slice(0, 200));
+    params.set("error_detail", detail.slice(0, 300));
   }
   return `${webUrl}/login?${params}`;
+}
+
+const X_API_HEADERS = {
+  Authorization: "",
+  "User-Agent": "Chomperz/1.0",
+};
+
+async function fetchTwitterProfile(accessToken: string): Promise<{
+  id: string;
+  username: string;
+  profile_image_url?: string;
+}> {
+  const urls = [
+    "https://api.x.com/2/users/me?user.fields=profile_image_url,username",
+    "https://api.twitter.com/2/users/me?user.fields=profile_image_url,username",
+  ];
+
+  let lastError = "";
+  for (const url of urls) {
+    const res = await fetch(url, {
+      headers: { ...X_API_HEADERS, Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      const body = (await res.json()) as {
+        data?: { id: string; username: string; profile_image_url?: string };
+      };
+      if (!body.data?.id || !body.data.username) {
+        throw new Error("Twitter profile response missing user data");
+      }
+      return body.data;
+    }
+    lastError = await res.text();
+    console.error("Twitter user fetch failed:", url, res.status, lastError);
+  }
+
+  throw new Error(lastError || "Twitter user fetch failed");
 }
 
 router.post("/mock-twitter", async (req: Request, res: Response) => {
@@ -71,7 +107,7 @@ router.get("/twitter", async (_req: Request, res: Response) => {
     response_type: "code",
     client_id: clientId,
     redirect_uri: callbackUrl,
-    scope: "users.read offline.access",
+    scope: "tweet.read users.read offline.access",
     state,
     code_challenge: generateCodeChallenge(codeVerifier),
     code_challenge_method: "S256",
@@ -123,21 +159,29 @@ router.get("/twitter/callback", async (req: Request, res: Response) => {
       res.redirect(loginRedirect(webUrl, errorCode, errBody));
       return;
     }
-    const tokenData = (await tokenRes.json()) as { access_token: string };
-    const userRes = await fetch(
-      "https://api.x.com/2/users/me?user.fields=profile_image_url,username",
-      { headers: { Authorization: `Bearer ${tokenData.access_token}` } }
-    );
-    if (!userRes.ok) {
-      const errBody = await userRes.text();
-      console.error("Twitter user fetch failed:", userRes.status, errBody);
-      res.redirect(loginRedirect(webUrl, "user_fetch_failed", errBody));
+    const tokenData = (await tokenRes.json()) as { access_token?: string };
+    if (!tokenData.access_token) {
+      console.error("Twitter token response missing access_token:", tokenData);
+      res.redirect(loginRedirect(webUrl, "token_exchange_failed", "missing access_token"));
       return;
     }
-    const userData = (await userRes.json()) as {
-      data: { id: string; username: string; profile_image_url?: string };
-    };
-    const { id: twitterId, username, profile_image_url } = userData.data;
+
+    let profile: { id: string; username: string; profile_image_url?: string };
+    try {
+      profile = await fetchTwitterProfile(tokenData.access_token);
+    } catch (err) {
+      const errBody = err instanceof Error ? err.message : "Twitter user fetch failed";
+      let errorCode = "user_fetch_failed";
+      if (errBody.includes("Unsupported Authentication")) {
+        errorCode = "user_context_required";
+      } else if (errBody.includes("Forbidden") || errBody.includes("403")) {
+        errorCode = "twitter_forbidden";
+      }
+      res.redirect(loginRedirect(webUrl, errorCode, errBody));
+      return;
+    }
+
+    const { id: twitterId, username, profile_image_url } = profile;
     let player = await Player.findOne({ twitterId });
     if (!player) {
       player = await Player.create({
