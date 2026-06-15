@@ -253,6 +253,20 @@ router.post("/verify-wallet", requireAuth, async (req: Request, res: Response) =
   }
 });
 
+router.post("/disconnect-wallet", requireAuth, async (req: Request, res: Response) => {
+  const player = await Player.findById(req.auth!.playerId);
+  if (!player) {
+    res.status(404).json({ error: "Player not found" });
+    return;
+  }
+  player.walletAddress = null;
+  player.cachedNftCount = 0;
+  player.cachedTokenIds = [];
+  player.cachedRaritySum = 0;
+  await player.save();
+  res.json({ success: true });
+});
+
 router.post("/logout", (_req: Request, res: Response) => {
   res.clearCookie("chomperz_token", { path: "/" });
   res.json({ success: true });
