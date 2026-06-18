@@ -4,8 +4,9 @@ import { getChomperLabel } from "../lib/chomper";
 import { getUserEconomy } from "./economy";
 import { getBalances } from "./resources";
 import { getWalletAddress } from "./wallet";
-import { getUpgradeCosts } from "./skills";
+import { getUpgradeCosts, getSpeedUpgradeRemainingMs, isSpeedUpgrading } from "./skills";
 import { Nft } from "../models/Nft";
+import { getSkillsPayload } from "./activeSkills";
 
 export async function serializePlayer(user: IUser, skill: ISkill) {
   const userId = user._id.toString();
@@ -15,6 +16,7 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
   const tokenDocs = await Nft.find({ userId }).select("tokenId rarity").lean();
   const costs = getUpgradeCosts(skill);
   const nfts = tokenDocs.map((n) => ({ tokenId: n.tokenId, rarity: n.rarity }));
+  const activeSkills = await getSkillsPayload(userId);
 
   return {
     id: user._id,
@@ -32,12 +34,16 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
     lastClaimAt: user.lastClaimAt,
     powerLvl: skill.powerLvl,
     speedLvl: skill.speedLvl,
+    speedUpgradingUntil: skill.speedUpgradingUntil,
+    speedUpgradeRemainingMs: getSpeedUpgradeRemainingMs(skill),
+    isSpeedUpgrading: isSpeedUpgrading(skill),
     powerUpgradeCost: costs.powerUpgradeCost,
     speedUpgradeCost: costs.speedUpgradeCost,
     cachedNftCount: economy.breakdown.nftCount,
     cachedTokenIds: tokenDocs.map((t) => t.tokenId),
     nfts,
     chomperLabel: getChomperLabel(economy.nfts),
+    activeSkills,
     economy: {
       nftCount: economy.breakdown.nftCount,
       quantityBoost: economy.breakdown.quantityBoost,

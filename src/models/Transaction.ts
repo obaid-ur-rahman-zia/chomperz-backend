@@ -7,7 +7,9 @@ export type TransactionKind =
   | "crib_buy"
   | "plot_bid"
   | "daily_login"
-  | "daily_task";
+  | "daily_task"
+  | "skill_reward"
+  | "active_skill_upgrade";
 
 export interface ITransaction extends Document {
   userId: Types.ObjectId;
@@ -23,7 +25,16 @@ const TransactionSchema = new Schema<ITransaction>(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     type: {
       type: String,
-      enum: ["claim", "upgrade", "crib_buy", "plot_bid", "daily_login", "daily_task"],
+      enum: [
+        "claim",
+        "upgrade",
+        "crib_buy",
+        "plot_bid",
+        "daily_login",
+        "daily_task",
+        "skill_reward",
+        "active_skill_upgrade",
+      ],
       required: true,
     },
     currency: { type: String, enum: ["zCoins", "coins"], required: true },

@@ -1,13 +1,24 @@
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth";
 import { findUserById, claimDailyTask } from "../services/user";
-import { ensureSkill, upgradeSkill } from "../services/skills";
+import { ensureSkill, upgradeSkill, applySpeedUpgradeIfReady } from "../services/skills";
 import { serializePlayer } from "../services/player";
 import { getUserEconomy } from "../services/economy";
 import { creditBalance } from "../services/resources";
 import { getWalletAddress } from "../services/wallet";
 import { syncUserNfts, validateChainConfig } from "../services/nft";
 import { getRoomLayout, buyFurniture, saveLayout } from "../services/room";
+import {
+  getSkillsPayload,
+  selectSkill,
+  startAction,
+  completeAction,
+  getActionStatus,
+  upgradeActiveSkill,
+} from "../services/activeSkills";
+import { getInventory } from "../services/inventory";
+import type { ActiveSkillType } from "../models/Skill";
+import { ACTIVE_SKILL_TYPES } from "../models/Skill";
 
 const router = Router();
 
@@ -15,6 +26,7 @@ async function loadUserContext(userId: string) {
   const user = await findUserById(userId);
   if (!user) return null;
   const skill = await ensureSkill(userId);
+  await applySpeedUpgradeIfReady(skill);
   return { user, skill };
 }
 
@@ -166,6 +178,75 @@ router.post("/crib/layout", requireAuth, async (req: Request, res: Response) => 
     res.json({ success: true, layout: saved });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Save failed" });
+  }
+});
+
+router.get("/inventory", requireAuth, async (req: Request, res: Response) => {
+  const items = await getInventory(req.auth!.playerId);
+  res.json({ items });
+});
+
+router.get("/skills", requireAuth, async (req: Request, res: Response) => {
+  try {
+    res.json(await getSkillsPayload(req.auth!.playerId));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Failed to load skills" });
+  }
+});
+
+router.get("/skills/status", requireAuth, async (req: Request, res: Response) => {
+  try {
+    res.json(await getActionStatus(req.auth!.playerId));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Failed to get status" });
+  }
+});
+
+router.post("/skills/select", requireAuth, async (req: Request, res: Response) => {
+  const { skill } = req.body as { skill?: string };
+  if (!skill || !ACTIVE_SKILL_TYPES.includes(skill as ActiveSkillType)) {
+    res.status(400).json({ error: "Invalid skill" });
+    return;
+  }
+  try {
+    res.json(await selectSkill(req.auth!.playerId, skill as ActiveSkillType));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Select failed" });
+  }
+});
+
+router.post("/skills/start", requireAuth, async (req: Request, res: Response) => {
+  try {
+    res.json(await startAction(req.auth!.playerId));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Start failed" });
+  }
+});
+
+router.post("/skills/complete", requireAuth, async (req: Request, res: Response) => {
+  try {
+    res.json(await completeAction(req.auth!.playerId));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Complete failed" });
+  }
+});
+
+router.post("/skills/upgrade", requireAuth, async (req: Request, res: Response) => {
+  const { skill } = req.body as { skill?: string };
+  if (!skill || !ACTIVE_SKILL_TYPES.includes(skill as ActiveSkillType)) {
+    res.status(400).json({ error: "Invalid skill" });
+    return;
+  }
+  try {
+    const payload = await upgradeActiveSkill(req.auth!.playerId, skill as ActiveSkillType);
+    const ctx = await loadUserContext(req.auth!.playerId);
+    res.json({
+      success: true,
+      ...payload,
+      player: ctx ? await serializePlayer(ctx.user, ctx.skill) : null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Upgrade failed" });
   }
 });
 

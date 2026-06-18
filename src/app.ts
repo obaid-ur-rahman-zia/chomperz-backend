@@ -5,6 +5,7 @@ import rateLimit from "express-rate-limit";
 import authRoutes from "./routes/auth";
 import playerRoutes from "./routes/player";
 import plotsRoutes from "./routes/plots";
+import leaderboardRoutes from "./routes/leaderboard";
 
 export function createApp(ensureDb: () => Promise<void>): express.Application {
   const app = express();
@@ -47,6 +48,7 @@ export function createApp(ensureDb: () => Promise<void>): express.Application {
   app.use("/api/auth", authRoutes);
   app.use("/api/player", playerRoutes);
   app.use("/api/plots", plotsRoutes);
+  app.use("/api/leaderboard", leaderboardRoutes);
 
   return app;
 }
