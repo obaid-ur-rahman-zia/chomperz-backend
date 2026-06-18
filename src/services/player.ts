@@ -1,6 +1,7 @@
 import type { IUser } from "../models/User";
 import type { ISkill } from "../models/Skill";
 import { getChomperLabel } from "../lib/chomper";
+import { DAILY_TASK_COINS } from "../lib/constants";
 import { getUserEconomy } from "./economy";
 import { getBalances } from "./resources";
 import { getWalletAddress } from "./wallet";
@@ -32,6 +33,8 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
     lastLoginAt: user.lastLoginAt,
     lastClaimedAt: user.lastClaimAt,
     lastClaimAt: user.lastClaimAt,
+    lastDailyTaskAt: user.lastDailyTaskAt,
+    dailyTaskReward: DAILY_TASK_COINS,
     powerLvl: skill.powerLvl,
     speedLvl: skill.speedLvl,
     speedUpgradingUntil: skill.speedUpgradingUntil,
