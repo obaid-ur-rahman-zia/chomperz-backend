@@ -52,10 +52,3 @@ export function buildNftListFromTokenIds(tokenIds: number[]): NftToken[] {
     rarity: defaultRarityFromTokenId(tokenId),
   }));
 }
-
-export function buildNftListFromCount(count: number): NftToken[] {
-  return Array.from({ length: count }, (_, i) => ({
-    tokenId: i + 1,
-    rarity: "common" as RarityTier,
-  }));
-}

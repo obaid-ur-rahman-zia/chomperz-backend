@@ -1,20 +1,23 @@
-import { LandPlot } from "../models/LandPlot";
-import { Player } from "../models/Player";
+import mongoose from "mongoose";
+import { Land } from "../models/Land";
 import { getPlotName } from "../lib/economy";
 
-/** Sparse unique index allows only one doc with walletAddress: null — unset stale nulls. */
-export async function fixPlayerWalletIndex(): Promise<void> {
-  const result = await Player.updateMany(
-    { $or: [{ walletAddress: null }, { walletAddress: "" }] },
-    { $unset: { walletAddress: 1 } }
-  );
-  if (result.modifiedCount > 0) {
-    console.log(`Cleared null walletAddress on ${result.modifiedCount} player(s)`);
+export async function dropLegacyCollections(): Promise<void> {
+  const db = mongoose.connection.db;
+  if (!db) return;
+
+  for (const name of ["players", "landplots"]) {
+    try {
+      await db.dropCollection(name);
+      console.log(`Dropped legacy collection: ${name}`);
+    } catch {
+      /* collection may not exist */
+    }
   }
 }
 
-export async function seedLandPlots(): Promise<void> {
-  const count = await LandPlot.countDocuments();
+export async function seedLands(): Promise<void> {
+  const count = await Land.countDocuments();
   if (count >= 100) {
     await seedDemoPlot();
     return;
@@ -24,30 +27,33 @@ export async function seedLandPlots(): Promise<void> {
     const isLegendary = plotId < 10;
     return {
       plotId,
-      isLegendary,
+      type: isLegendary ? ("legendary" as const) : ("frontier" as const),
       legendaryTokenId: isLegendary ? plotId + 1 : null,
       name: getPlotName(plotId),
+      ownerId: null,
       ownerWallet: null,
       landlordHandle: null,
       landlordAvatarUrl: null,
+      purchasePrice: 0,
+      lastClaimAt: null,
       status: "unclaimed" as const,
       renters: [],
     };
   });
 
-  await LandPlot.deleteMany({});
-  await LandPlot.insertMany(plots);
-  console.log("Seeded 100 land plots");
+  await Land.deleteMany({});
+  await Land.insertMany(plots);
+  console.log("Seeded 100 lands");
   await seedDemoPlot();
 }
 
-/** Demo data for plot #12 — matches client mockup */
 export async function seedDemoPlot(): Promise<void> {
-  await LandPlot.updateOne(
+  await Land.updateOne(
     { plotId: 11 },
     {
       $set: {
         name: "The Overgrowth Zone",
+        type: "frontier",
         status: "owned",
         ownerWallet: "0xdinowhale000000000000000000000000000001",
         landlordHandle: "@DinoWhale",

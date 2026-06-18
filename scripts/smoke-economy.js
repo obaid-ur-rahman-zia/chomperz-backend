@@ -1,10 +1,10 @@
 const {
   getEconomyBreakdown,
-  buildNftListFromCount,
+  buildNftListFromTokenIds,
   calculateOfflineEarnings,
 } = require("../dist/lib/economy");
 
-const nfts = buildNftListFromCount(5);
+const nfts = buildNftListFromTokenIds([1, 42, 100, 500, 5000]);
 const breakdown = getEconomyBreakdown({ nfts, powerLvl: 0 });
 console.log("5 NFT economy:", breakdown);
 

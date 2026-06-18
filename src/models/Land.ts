@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema, Document, Types } from "mongoose";
 import type { PlotStatus } from "../lib/economy";
 
 export interface IRenter {
@@ -8,15 +8,18 @@ export interface IRenter {
   escrowBalance: number;
 }
 
-export interface ILandPlot extends Document {
+export interface ILand extends Document {
   plotId: number;
-  isLegendary: boolean;
-  legendaryTokenId: number | null;
-  name: string;
+  type: "legendary" | "frontier";
+  ownerId: Types.ObjectId | null;
   ownerWallet: string | null;
   landlordHandle: string | null;
   landlordAvatarUrl: string | null;
+  legendaryTokenId: number | null;
+  purchasePrice: number;
+  lastClaimAt: Date | null;
   status: PlotStatus;
+  name: string;
   renters: IRenter[];
 }
 
@@ -30,19 +33,22 @@ const RenterSchema = new Schema<IRenter>(
   { _id: false }
 );
 
-const LandPlotSchema = new Schema<ILandPlot>({
+const LandSchema = new Schema<ILand>({
   plotId: { type: Number, required: true, unique: true, min: 0, max: 99 },
-  isLegendary: { type: Boolean, default: false },
-  legendaryTokenId: { type: Number, default: null },
-  name: { type: String, required: true },
+  type: { type: String, enum: ["legendary", "frontier"], required: true },
+  ownerId: { type: Schema.Types.ObjectId, ref: "User", default: null },
   ownerWallet: { type: String, default: null, lowercase: true },
   landlordHandle: { type: String, default: null },
   landlordAvatarUrl: { type: String, default: null },
+  legendaryTokenId: { type: Number, default: null },
+  purchasePrice: { type: Number, default: 0 },
+  lastClaimAt: { type: Date, default: null },
   status: {
     type: String,
     enum: ["unclaimed", "owned", "abandoned"],
     default: "unclaimed",
   },
+  name: { type: String, required: true },
   renters: {
     type: [RenterSchema],
     validate: {
@@ -52,4 +58,4 @@ const LandPlotSchema = new Schema<ILandPlot>({
   },
 });
 
-export const LandPlot = mongoose.model<ILandPlot>("LandPlot", LandPlotSchema);
+export const Land = mongoose.model<ILand>("Land", LandSchema);

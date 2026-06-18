@@ -5,6 +5,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_me";
 
 export interface AuthPayload {
   playerId: string;
+  userId: string;
   twitterId: string;
   twitterHandle: string;
 }

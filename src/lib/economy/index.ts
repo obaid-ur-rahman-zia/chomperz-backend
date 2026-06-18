@@ -1,6 +1,5 @@
 import { BASE_Z_COINS_PER_DAY } from "./types";
 import {
-  buildNftListFromTokenIds,
   calculateNftMultiplier,
   calculatePowerMultiplier,
   calculateQuantityBoost,
@@ -39,10 +38,6 @@ export function calculateOfflineEarnings(
 ): number {
   const msElapsed = Math.max(0, now.getTime() - lastClaimedAt.getTime());
   return dailyRate * (msElapsed / (24 * 60 * 60 * 1000));
-}
-
-export function nftsFromCachedTokenIds(tokenIds: number[]): NftToken[] {
-  return tokenIds.length > 0 ? buildNftListFromTokenIds(tokenIds) : [];
 }
 
 export * from "./types";

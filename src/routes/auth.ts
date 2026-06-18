@@ -1,17 +1,13 @@
 import crypto from "crypto";
 import { Router, Request, Response } from "express";
-import { Player } from "../models/Player";
 import { OAuthState } from "../models/OAuthState";
+import { SiweNonce } from "../models/SiweNonce";
 import { requireAuth, setAuthCookie, signToken } from "../middleware/auth";
+import { bootstrapUser } from "../services/user";
+import { linkWallet, unlinkWallet, WalletLinkError } from "../services/wallet";
+import { validateChainId } from "../services/nft";
 
 const router = Router();
-const siweNonces = new Map<string, { nonce: string; playerId: string; createdAt: number }>();
-
-function cleanExpiredSiwe(): void {
-  const maxAge = 10 * 60 * 1000;
-  const now = Date.now();
-  for (const [k, v] of siweNonces) if (now - v.createdAt > maxAge) siweNonces.delete(k);
-}
 
 function generateCodeVerifier(): string {
   return crypto.randomBytes(32).toString("base64url");
@@ -27,6 +23,15 @@ function loginRedirect(webUrl: string, error: string, detail?: string): string {
     params.set("error_detail", detail.slice(0, 300));
   }
   return `${webUrl}/login?${params}`;
+}
+
+function authTokenFromUser(user: { _id: { toString(): string }; twitterId: string; username: string }) {
+  return signToken({
+    playerId: user._id.toString(),
+    userId: user._id.toString(),
+    twitterId: user.twitterId,
+    twitterHandle: user.username,
+  });
 }
 
 const X_API_HEADERS = {
@@ -76,20 +81,13 @@ router.post("/mock-twitter", async (req: Request, res: Response) => {
     return;
   }
   const twitterId = `mock_${handle.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-  let player = await Player.findOne({ twitterId });
-  if (!player) {
-    player = await Player.create({
-      twitterId,
-      twitterHandle: handle.startsWith("@") ? handle : `@${handle}`,
-    });
-  }
-  const token = signToken({
-    playerId: player._id.toString(),
-    twitterId: player.twitterId,
-    twitterHandle: player.twitterHandle,
+  const { user } = await bootstrapUser({
+    twitterId,
+    username: handle.startsWith("@") ? handle : `@${handle}`,
   });
+  const token = authTokenFromUser(user);
   setAuthCookie(res, token);
-  res.json({ success: true, token, player });
+  res.json({ success: true, token, player: user });
 });
 
 router.get("/twitter", async (_req: Request, res: Response) => {
@@ -161,7 +159,6 @@ router.get("/twitter/callback", async (req: Request, res: Response) => {
     }
     const tokenData = (await tokenRes.json()) as { access_token?: string };
     if (!tokenData.access_token) {
-      console.error("Twitter token response missing access_token:", tokenData);
       res.redirect(loginRedirect(webUrl, "token_exchange_failed", "missing access_token"));
       return;
     }
@@ -172,52 +169,31 @@ router.get("/twitter/callback", async (req: Request, res: Response) => {
     } catch (err) {
       const errBody = err instanceof Error ? err.message : "Twitter user fetch failed";
       let errorCode = "user_fetch_failed";
-      if (errBody.includes("Unsupported Authentication")) {
-        errorCode = "user_context_required";
-      } else if (errBody.includes("Forbidden") || errBody.includes("403")) {
-        errorCode = "twitter_forbidden";
-      }
+      if (errBody.includes("Unsupported Authentication")) errorCode = "user_context_required";
+      else if (errBody.includes("Forbidden") || errBody.includes("403")) errorCode = "twitter_forbidden";
       res.redirect(loginRedirect(webUrl, errorCode, errBody));
       return;
     }
 
-    const { id: twitterId, username, profile_image_url } = profile;
-    const player = await Player.findOneAndUpdate(
-      { twitterId },
-      {
-        $set: {
-          twitterHandle: `@${username}`,
-          profilePicUrl: profile_image_url || "",
-        },
-        $setOnInsert: { twitterId },
-      },
-      { upsert: true, new: true, runValidators: true }
-    );
-    const jwt = signToken({
-      playerId: player._id.toString(),
-      twitterId: player.twitterId,
-      twitterHandle: player.twitterHandle,
+    const { user } = await bootstrapUser({
+      twitterId: profile.id,
+      username: profile.username,
+      profilePicUrl: profile.profile_image_url,
     });
+
+    const jwt = authTokenFromUser(user);
     setAuthCookie(res, jwt);
     res.redirect(`${webUrl}/auth/callback#token=${jwt}`);
   } catch (err) {
     console.error("Twitter callback error:", err);
-    const detail =
-      err instanceof Error
-        ? err.message
-        : "unknown";
+    const detail = err instanceof Error ? err.message : "unknown";
     res.redirect(loginRedirect(webUrl, "server_error", detail));
   }
 });
 
 router.get("/nonce", requireAuth, async (req: Request, res: Response) => {
-  cleanExpiredSiwe();
   const nonce = crypto.randomBytes(16).toString("hex");
-  siweNonces.set(nonce, {
-    nonce,
-    playerId: req.auth!.playerId,
-    createdAt: Date.now(),
-  });
+  await SiweNonce.create({ nonce, userId: req.auth!.playerId });
   res.json({ nonce });
 });
 
@@ -230,52 +206,36 @@ router.post("/verify-wallet", requireAuth, async (req: Request, res: Response) =
   try {
     const { SiweMessage } = await import("siwe");
     const fields = await new SiweMessage(message).verify({ signature });
-    const stored = siweNonces.get(fields.data.nonce);
-    if (!stored || stored.playerId !== req.auth!.playerId) {
+
+    validateChainId(fields.data.chainId);
+
+    const stored = await SiweNonce.findOneAndDelete({ nonce: fields.data.nonce });
+    if (!stored || stored.userId !== req.auth!.playerId) {
       res.status(400).json({ error: "Invalid or expired nonce" });
       return;
     }
-    siweNonces.delete(fields.data.nonce);
+
     const wallet = fields.data.address.toLowerCase();
-    const existing = await Player.findOne({ walletAddress: wallet });
-    if (existing && existing._id.toString() !== req.auth!.playerId) {
-      res.status(409).json({ error: "Wallet already linked to another account" });
-      return;
+    try {
+      await linkWallet(req.auth!.playerId, wallet);
+    } catch (err) {
+      if (err instanceof WalletLinkError) {
+        res.status(err.status).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
     }
-    const player = await Player.findById(req.auth!.playerId);
-    if (!player) {
-      res.status(404).json({ error: "Player not found" });
-      return;
-    }
-    player.walletAddress = wallet;
-    await player.save();
+
     res.json({ success: true, walletAddress: wallet });
   } catch (err) {
     console.error("SIWE verify error:", err);
-    res.status(400).json({ error: "Signature verification failed" });
+    const msg = err instanceof Error ? err.message : "Signature verification failed";
+    res.status(400).json({ error: msg });
   }
 });
 
 router.post("/disconnect-wallet", requireAuth, async (req: Request, res: Response) => {
-  const player = await Player.findById(req.auth!.playerId);
-  if (!player) {
-    res.status(404).json({ error: "Player not found" });
-    return;
-  }
-  player.cachedNftCount = 0;
-  player.cachedTokenIds = [];
-  player.cachedRaritySum = 0;
-  await Player.updateOne(
-    { _id: player._id },
-    {
-      $unset: { walletAddress: 1 },
-      $set: {
-        cachedNftCount: 0,
-        cachedTokenIds: [],
-        cachedRaritySum: 0,
-      },
-    }
-  );
+  await unlinkWallet(req.auth!.playerId);
   res.json({ success: true });
 });
 

@@ -1,23 +1,32 @@
 import { ethers } from "ethers";
 import {
-  buildNftListFromTokenIds,
-  calculateRarityBoost,
+  calculateNftMultiplier,
   defaultRarityFromTokenId,
   type NftToken,
+  type RarityTier,
 } from "../lib/economy";
+import { Nft } from "../models/Nft";
+import { updateUserNftCache } from "./user";
 
 const ERC721_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
   "function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)",
   "function getTokensOfOwner(address owner) view returns (uint256[], uint8[])",
+  "function tokenURI(uint256 tokenId) view returns (string)",
 ];
 
-const RARITY_ENUM_MAP: Record<number, NftToken["rarity"]> = {
+const RARITY_ENUM_MAP: Record<number, RarityTier> = {
   0: "common",
   1: "uncommon",
   2: "rare",
   3: "legendary",
 };
+
+function getContractAddress(): string {
+  const address = process.env.CONTRACT_ADDRESS;
+  if (!address) throw new Error("CONTRACT_ADDRESS must be set");
+  return address.toLowerCase();
+}
 
 function getContract(): ethers.Contract {
   const rpcUrl = process.env.RPC_URL;
@@ -25,11 +34,52 @@ function getContract(): ethers.Contract {
   if (!rpcUrl || !address) {
     throw new Error("RPC_URL and CONTRACT_ADDRESS must be set");
   }
-  return new ethers.Contract(
-    address,
-    ERC721_ABI,
-    new ethers.JsonRpcProvider(rpcUrl)
+  return new ethers.Contract(address, ERC721_ABI, new ethers.JsonRpcProvider(rpcUrl));
+}
+
+function parseRarityFromMetadata(json: unknown): RarityTier | null {
+  if (!json || typeof json !== "object") return null;
+  const obj = json as Record<string, unknown>;
+  const attrs = obj.attributes as Array<{ trait_type?: string; value?: string }> | undefined;
+  if (!Array.isArray(attrs)) return null;
+  const rarityAttr = attrs.find(
+    (a) => a.trait_type?.toLowerCase() === "rarity" && typeof a.value === "string"
   );
+  if (!rarityAttr?.value) return null;
+  const v = rarityAttr.value.toLowerCase();
+  if (v === "common" || v === "uncommon" || v === "rare" || v === "legendary") {
+    return v;
+  }
+  return null;
+}
+
+async function fetchMetadataRarity(tokenURI: string): Promise<RarityTier | null> {
+  try {
+    const url = tokenURI.startsWith("ipfs://")
+      ? `https://ipfs.io/ipfs/${tokenURI.slice(7)}`
+      : tokenURI;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return parseRarityFromMetadata(json);
+  } catch {
+    return null;
+  }
+}
+
+async function enrichRarityFromMetadata(
+  contract: ethers.Contract,
+  tokenId: number,
+  rarity: RarityTier
+): Promise<RarityTier> {
+  try {
+    const uri = String(await contract.tokenURI(tokenId));
+    const metaRarity = await fetchMetadataRarity(uri);
+    if (metaRarity) return metaRarity;
+  } catch {
+    /* keep existing rarity */
+  }
+  return rarity;
 }
 
 async function tryGetTokensOfOwner(
@@ -42,10 +92,9 @@ async function tryGetTokensOfOwner(
     for (let i = 0; i < tokenIds.length; i++) {
       const tokenId = Number(tokenIds[i]);
       const rarityEnum = Number(rarities[i]);
-      tokens.push({
-        tokenId,
-        rarity: RARITY_ENUM_MAP[rarityEnum] ?? defaultRarityFromTokenId(tokenId),
-      });
+      let rarity = RARITY_ENUM_MAP[rarityEnum] ?? defaultRarityFromTokenId(tokenId);
+      rarity = await enrichRarityFromMetadata(contract, tokenId, rarity);
+      tokens.push({ tokenId, rarity });
     }
     return tokens;
   } catch {
@@ -60,38 +109,84 @@ async function enumerateByIndex(
 ): Promise<NftToken[]> {
   const tokens: NftToken[] = [];
   for (let i = 0; i < balance; i++) {
-    try {
-      const tokenId = Number(await contract.tokenOfOwnerByIndex(wallet, i));
-      tokens.push({ tokenId, rarity: defaultRarityFromTokenId(tokenId) });
-    } catch {
-      break;
-    }
+    const tokenId = Number(await contract.tokenOfOwnerByIndex(wallet, i));
+    let rarity = defaultRarityFromTokenId(tokenId);
+    rarity = await enrichRarityFromMetadata(contract, tokenId, rarity);
+    tokens.push({ tokenId, rarity });
   }
   return tokens;
 }
 
-export async function fetchWalletNfts(walletAddress: string): Promise<{
-  nfts: NftToken[];
-  count: number;
-  raritySum: number;
-}> {
+async function readChainNfts(walletAddress: string): Promise<NftToken[]> {
   const contract = getContract();
   const wallet = walletAddress.toLowerCase();
   const balance = Number(await contract.balanceOf(wallet));
 
-  if (balance === 0) {
-    return { nfts: [], count: 0, raritySum: 0 };
-  }
+  if (balance === 0) return [];
 
   let nfts = await tryGetTokensOfOwner(contract, wallet);
   if (!nfts || nfts.length === 0) {
     nfts = await enumerateByIndex(contract, wallet, balance);
   }
+
   if (nfts.length === 0) {
-    nfts = buildNftListFromTokenIds(
-      Array.from({ length: balance }, (_, i) => i + 1)
+    throw new Error(
+      `Wallet holds ${balance} NFT(s) but could not enumerate token IDs from contract`
     );
   }
 
-  return { nfts, count: nfts.length, raritySum: calculateRarityBoost(nfts) };
+  return nfts;
+}
+
+/** Sync on-chain NFTs into DB and update user cache. No fake fallbacks. */
+export async function syncUserNfts(
+  userId: string,
+  walletAddress: string
+): Promise<{ nfts: NftToken[]; count: number; multiplier: number }> {
+  const contractAddress = getContractAddress();
+  const chainNfts = await readChainNfts(walletAddress);
+
+  await Nft.deleteMany({ userId });
+
+  if (chainNfts.length > 0) {
+    const contract = getContract();
+    await Nft.insertMany(
+      await Promise.all(
+        chainNfts.map(async (n) => {
+          let metadataUri = "";
+          try {
+            metadataUri = String(await contract.tokenURI(n.tokenId));
+          } catch {
+            /* optional */
+          }
+          return {
+            userId,
+            contractAddress,
+            tokenId: n.tokenId,
+            rarity: n.rarity,
+            metadataUri,
+            lastSyncedAt: new Date(),
+          };
+        })
+      )
+    );
+  }
+
+  const multiplier = calculateNftMultiplier(chainNfts);
+  await updateUserNftCache(userId, chainNfts.length, multiplier);
+
+  return { nfts: chainNfts, count: chainNfts.length, multiplier };
+}
+
+export function validateChainConfig(): void {
+  if (!process.env.RPC_URL || !process.env.CONTRACT_ADDRESS) {
+    throw new Error("RPC_URL and CONTRACT_ADDRESS must be configured");
+  }
+}
+
+export function validateChainId(chainId: number): void {
+  const expected = process.env.CHAIN_ID ? Number(process.env.CHAIN_ID) : null;
+  if (expected && chainId !== expected) {
+    throw new Error(`Wrong network. Please switch to chain ID ${expected}`);
+  }
 }
