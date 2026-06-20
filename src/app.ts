@@ -6,6 +6,7 @@ import authRoutes from "./routes/auth";
 import playerRoutes from "./routes/player";
 import plotsRoutes from "./routes/plots";
 import leaderboardRoutes from "./routes/leaderboard";
+import webhookRoutes from "./routes/webhooks";
 
 export function createApp(ensureDb: () => Promise<void>): express.Application {
   const app = express();
@@ -21,7 +22,15 @@ export function createApp(ensureDb: () => Promise<void>): express.Application {
       credentials: true,
     })
   );
-  app.use(express.json());
+  app.use(
+    express.json({
+      verify: (req, _res, buf) => {
+        if (req.url?.startsWith("/api/webhooks")) {
+          (req as express.Request & { rawBody?: string }).rawBody = buf.toString("utf8");
+        }
+      },
+    })
+  );
   app.use(cookieParser());
   app.use(
     rateLimit({
@@ -49,6 +58,7 @@ export function createApp(ensureDb: () => Promise<void>): express.Application {
   app.use("/api/player", playerRoutes);
   app.use("/api/plots", plotsRoutes);
   app.use("/api/leaderboard", leaderboardRoutes);
+  app.use("/api/webhooks", webhookRoutes);
 
   return app;
 }

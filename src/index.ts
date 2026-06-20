@@ -1,13 +1,16 @@
 import dotenv from "dotenv";
 import path from "path";
+import http from "http";
 
 if (process.env.VERCEL !== "1") {
   dotenv.config({ path: path.resolve(__dirname, "../.env") });
 }
 
 import mongoose from "mongoose";
+import { Server as SocketIOServer } from "socket.io";
 import { createApp } from "./app";
 import { bootstrapDatabase } from "./db/bootstrap";
+import { initTerritorySocket } from "./socket/territory";
 
 type MongooseCache = {
   conn: typeof mongoose | null;
@@ -51,8 +54,23 @@ if (process.env.VERCEL !== "1") {
   ensureDb()
     .then(() => {
       console.log("MongoDB connected");
-      app.listen(PORT, () => {
-        console.log(`Chomperz API running on http://localhost:${PORT}`);
+      const server = http.createServer(app);
+      const webUrl = process.env.WEB_URL || "http://localhost:3000";
+      const extraOrigins = (process.env.ALLOWED_ORIGINS || "")
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean);
+
+      const io = new SocketIOServer(server, {
+        cors: {
+          origin: [webUrl, "http://localhost:3000", "http://127.0.0.1:3000", ...extraOrigins],
+          credentials: true,
+        },
+      });
+      initTerritorySocket(io);
+
+      server.listen(PORT, () => {
+        console.log(`Chomperz API running on http://localhost:${PORT} (HTTP + Socket.IO)`);
       });
     })
     .catch((err) => {

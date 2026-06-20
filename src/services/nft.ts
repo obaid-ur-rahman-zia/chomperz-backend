@@ -175,6 +175,13 @@ export async function syncUserNfts(
   const multiplier = calculateNftMultiplier(chainNfts);
   await updateUserNftCache(userId, chainNfts.length, multiplier);
 
+  const { syncAllLegendaryForWallet } = await import("./legendaryLand");
+  await syncAllLegendaryForWallet(
+    userId,
+    walletAddress,
+    chainNfts.map((n) => n.tokenId)
+  );
+
   return { nfts: chainNfts, count: chainNfts.length, multiplier };
 }
 

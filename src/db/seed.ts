@@ -74,6 +74,7 @@ export async function seedDemoPlot(): Promise<void> {
         name: "The Overgrowth Zone",
         type: "frontier",
         status: "owned",
+        lastClaimAt: new Date(),
         ownerWallet: "0xdinowhale000000000000000000000000000001",
         landlordHandle: "@DinoWhale",
         landlordAvatarUrl: "/images/chomper.jpg",

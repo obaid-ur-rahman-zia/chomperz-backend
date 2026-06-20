@@ -24,6 +24,8 @@ export interface ILand extends Document {
   legendaryTokenId: number | null;
   purchasePrice: number;
   lastClaimAt: Date | null;
+  abandonedAt: Date | null;
+  previousOwnerId: Types.ObjectId | null;
   status: PlotStatus;
   name: string;
   renters: IRenter[];
@@ -53,6 +55,8 @@ const LandSchema = new Schema<ILand>({
   legendaryTokenId: { type: Number, default: null },
   purchasePrice: { type: Number, default: 0 },
   lastClaimAt: { type: Date, default: null },
+  abandonedAt: { type: Date, default: null },
+  previousOwnerId: { type: Schema.Types.ObjectId, ref: "User", default: null },
   status: {
     type: String,
     enum: ["unclaimed", "owned", "abandoned"],

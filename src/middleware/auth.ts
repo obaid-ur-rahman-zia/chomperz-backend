@@ -44,6 +44,21 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
 }
 
+export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+  const header = req.headers.authorization;
+  const cookieToken = req.cookies?.chomperz_token as string | undefined;
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : cookieToken;
+
+  if (token) {
+    try {
+      req.auth = verifyToken(token);
+    } catch {
+      /* ignore invalid token for optional routes */
+    }
+  }
+  next();
+}
+
 export const COOKIE_NAME = "chomperz_token";
 
 export function setAuthCookie(res: Response, token: string): void {

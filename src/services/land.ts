@@ -3,42 +3,44 @@ import { User } from "../models/User";
 import { debitBalance, creditBalance } from "./resources";
 import { getWalletAddress } from "./wallet";
 import { MS_PER_DAY } from "../lib/constants";
+import { emitPlotPatch, emitTerritoryEvent, toPlotPatch } from "../socket/territory";
 
 const MAX_RENTERS = 3;
 const MIN_SEVEN_DAY_BID = 7;
 const LAND_PURCHASE_PRICE = 100;
-const LAND_INACTIVITY_MS = 7 * MS_PER_DAY;
+const LAND_CLAIM_MS = 7 * MS_PER_DAY;
 const LANDLORD_DAILY_TAX_PCT = 0.1;
 
-export async function enforceLandInactivity() {
-  const cutoff = new Date(Date.now() - LAND_INACTIVITY_MS);
-  const staleOwners = await User.find({ lastLoginAt: { $lt: cutoff } }).select("_id").lean();
-  const staleIds = staleOwners.map((u) => u._id);
-
-  if (staleIds.length === 0) return;
-
-  await Land.updateMany(
-    { ownerId: { $in: staleIds }, status: "owned" },
-    {
-      $set: {
-        ownerId: null,
-        ownerWallet: null,
-        landlordHandle: null,
-        landlordAvatarUrl: null,
-        status: "unclaimed",
-        renters: [],
-      },
-    }
-  );
+function isFrontier(plot: Pick<ILand, "type">): boolean {
+  return plot.type === "frontier";
 }
 
-export async function listLands() {
-  await enforceLandInactivity();
-  await expireStaleLeases();
-  return Land.find()
-    .select("plotId type legendaryTokenId name ownerWallet landlordHandle status renters")
-    .sort({ plotId: 1 })
-    .lean();
+export async function enforcePlotAbandonment(): Promise<number> {
+  const cutoff = new Date(Date.now() - LAND_CLAIM_MS);
+  const stale = await Land.find({
+    type: "frontier",
+    status: "owned",
+    lastClaimAt: { $lt: cutoff },
+  });
+
+  let count = 0;
+  for (const plot of stale) {
+    const previousOwnerId = plot.ownerId?.toString() ?? null;
+    plot.previousOwnerId = plot.ownerId;
+    plot.ownerId = null;
+    plot.ownerWallet = null;
+    plot.landlordHandle = null;
+    plot.landlordAvatarUrl = null;
+    plot.status = "abandoned";
+    plot.abandonedAt = new Date();
+    plot.renters = [];
+    await plot.save();
+    count++;
+
+    emitTerritoryEvent("landLost", { plotId: plot.plotId, previousOwnerId });
+    emitPlotPatch(toPlotPatch(plot));
+  }
+  return count;
 }
 
 async function expireStaleLeases() {
@@ -49,6 +51,7 @@ async function expireStaleLeases() {
     plot.renters = plot.renters.filter((r) => r.leaseExpiresAt && r.leaseExpiresAt > now);
     if (plot.renters.length !== before) {
       await plot.save();
+      emitPlotPatch(toPlotPatch(plot));
     }
   }
 }
@@ -68,8 +71,25 @@ function minOutbidAmount(sorted: ILand["renters"]): number {
   return Math.ceil(bid * 1.1);
 }
 
-export async function getLandDetail(plotId: number) {
-  await enforceLandInactivity();
+export function claimRemainingMs(lastClaimAt: Date | null): number {
+  if (!lastClaimAt) return 0;
+  const elapsed = Date.now() - lastClaimAt.getTime();
+  return Math.max(0, LAND_CLAIM_MS - elapsed);
+}
+
+export async function listLands() {
+  await enforcePlotAbandonment();
+  await expireStaleLeases();
+  return Land.find()
+    .select(
+      "plotId type legendaryTokenId name ownerWallet landlordHandle status renters lastClaimAt abandonedAt"
+    )
+    .sort({ plotId: 1 })
+    .lean();
+}
+
+export async function getLandDetail(plotId: number, viewerUserId?: string) {
+  await enforcePlotAbandonment();
   await expireStaleLeases();
 
   const plot = await Land.findOne({ plotId }).lean();
@@ -77,6 +97,9 @@ export async function getLandDetail(plotId: number) {
 
   const renters = sortedRenters({ renters: plot.renters ?? [] });
   const minBid = minOutbidAmount(renters);
+  const now = Date.now();
+  const isOwner =
+    viewerUserId && plot.ownerId && plot.ownerId.toString() === viewerUserId;
 
   return {
     ...plot,
@@ -85,7 +108,13 @@ export async function getLandDetail(plotId: number) {
     landType: plot.type === "legendary" ? "Legendary (Crown Land)" : "Frontier",
     displayId: String(plotId + 1).padStart(2, "0"),
     minBid,
-    purchasePrice: plot.status === "unclaimed" && plotId >= 10 && plotId <= 99 ? LAND_PURCHASE_PRICE : null,
+    purchasePrice:
+      isFrontier(plot) && plot.status === "unclaimed" && plotId >= 10 && plotId <= 99
+        ? LAND_PURCHASE_PRICE
+        : null,
+    canTakeover: isFrontier(plot) && plot.status === "abandoned",
+    canClaimLand: Boolean(isOwner && isFrontier(plot) && plot.status === "owned"),
+    claimRemainingMs: isFrontier(plot) && plot.status === "owned" ? claimRemainingMs(plot.lastClaimAt) : null,
     landlordTaxPct: 10,
   };
 }
@@ -103,7 +132,7 @@ export async function purchaseLand(userId: string, plotId: number) {
 
   const plot = await Land.findOne({ plotId });
   if (!plot) throw new Error("Plot not found");
-  if (plot.status !== "unclaimed" || plot.ownerId) {
+  if (!isFrontier(plot) || plot.status !== "unclaimed" || plot.ownerId) {
     throw new Error("Plot is not available for purchase");
   }
 
@@ -111,14 +140,95 @@ export async function purchaseLand(userId: string, plotId: number) {
     plotId,
   });
 
+  const now = new Date();
   plot.ownerId = user._id;
   plot.ownerWallet = wallet.toLowerCase();
   plot.landlordHandle = user.username;
   plot.landlordAvatarUrl = user.profilePicUrl;
   plot.purchasePrice = LAND_PURCHASE_PRICE;
   plot.status = "owned";
+  plot.lastClaimAt = now;
+  plot.abandonedAt = null;
+  plot.previousOwnerId = null;
   plot.renters = [];
   await plot.save();
+
+  emitTerritoryEvent("landPurchased", {
+    plotId,
+    ownerWallet: plot.ownerWallet,
+    ownerId: userId,
+    status: "owned",
+  });
+  emitPlotPatch(toPlotPatch(plot));
+
+  return { zCoins, plotId };
+}
+
+export async function claimLand(userId: string, plotId: number) {
+  const plot = await Land.findOne({ plotId });
+  if (!plot) throw new Error("Plot not found");
+  if (!isFrontier(plot) || plot.status !== "owned") {
+    throw new Error("This plot cannot be claimed");
+  }
+  if (!plot.ownerId || plot.ownerId.toString() !== userId) {
+    throw new Error("Only the land owner can claim");
+  }
+
+  plot.lastClaimAt = new Date();
+  plot.abandonedAt = null;
+  await plot.save();
+
+  emitTerritoryEvent("landClaimed", {
+    plotId,
+    lastClaimAt: plot.lastClaimAt.toISOString(),
+    ownerId: userId,
+  });
+  emitPlotPatch(toPlotPatch(plot));
+
+  return { plotId, lastClaimAt: plot.lastClaimAt };
+}
+
+export async function takeoverLand(userId: string, plotId: number) {
+  if (plotId < 10 || plotId > 99) {
+    throw new Error("Only frontier plots 11–100 can be taken over");
+  }
+
+  const wallet = await getWalletAddress(userId);
+  if (!wallet) throw new Error("Connect wallet before taking over land");
+
+  const user = await User.findById(userId);
+  if (!user) throw new Error("User not found");
+
+  const plot = await Land.findOne({ plotId });
+  if (!plot) throw new Error("Plot not found");
+  if (!isFrontier(plot) || plot.status !== "abandoned") {
+    throw new Error("Plot is not abandoned");
+  }
+
+  const zCoins = await debitBalance(userId, "zCoins", LAND_PURCHASE_PRICE, "plot_purchase", {
+    plotId,
+    takeover: true,
+  });
+
+  const now = new Date();
+  plot.previousOwnerId = plot.ownerId;
+  plot.ownerId = user._id;
+  plot.ownerWallet = wallet.toLowerCase();
+  plot.landlordHandle = user.username;
+  plot.landlordAvatarUrl = user.profilePicUrl;
+  plot.status = "owned";
+  plot.lastClaimAt = now;
+  plot.abandonedAt = null;
+  plot.renters = [];
+  await plot.save();
+
+  emitTerritoryEvent("landCaptured", {
+    plotId,
+    ownerWallet: plot.ownerWallet,
+    ownerId: userId,
+    status: "owned",
+  });
+  emitPlotPatch(toPlotPatch(plot));
 
   return { zCoins, plotId };
 }
@@ -225,6 +335,15 @@ export async function placeBid(userId: string, plotId: number, sevenDayBid: numb
   }
 
   await plot.save();
+
+  const updatedRenters = sortedRenters(plot);
+  emitTerritoryEvent("bidPlaced", {
+    plotId,
+    renters: updatedRenters,
+    minBid: minOutbidAmount(updatedRenters),
+  });
+  emitPlotPatch(toPlotPatch(plot));
+
   return { zCoins, plotId, sevenDayBid };
 }
 

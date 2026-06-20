@@ -48,8 +48,9 @@ assert.ok(Math.abs(calculateQuantityBoost(5) - 1.05) < 0.001);
 const nfts = buildNftListFromTokenIds([50, 500, 5000]);
 assert.ok(Math.abs(calculateRarityBoost(nfts) - (0.25 + 0.12 + 0.05)) < 0.001);
 
-// ── Skill yields L1 ──
+// ── Skill yields L1 & L10 ──
 assert.strictEqual(Math.round(woodcuttingYieldPct(1)), 10);
+assert.strictEqual(Math.round(woodcuttingYieldPct(10)), 11);
 assert.strictEqual(Math.round(miningYieldPct(1)), 5);
 
 // ── Skill XP L1 ──
