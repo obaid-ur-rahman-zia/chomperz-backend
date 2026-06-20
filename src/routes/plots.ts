@@ -5,7 +5,6 @@ import {
   getLandDetail,
   placeBid,
   purchaseLand,
-  claimLand,
   takeoverLand,
 } from "../services/land";
 
@@ -22,7 +21,6 @@ router.get("/", async (_req: Request, res: Response) => {
       ownerWallet: p.ownerWallet,
       landlordHandle: p.landlordHandle,
       status: p.status,
-      lastClaimAt: p.lastClaimAt ? new Date(p.lastClaimAt).toISOString() : null,
       abandonedAt: p.abandonedAt ? new Date(p.abandonedAt).toISOString() : null,
       renters: p.renters,
     })),
@@ -55,20 +53,6 @@ router.post("/:id/purchase", requireAuth, async (req: Request, res: Response) =>
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Purchase failed" });
-  }
-});
-
-router.post("/:id/claim-land", requireAuth, async (req: Request, res: Response) => {
-  const plotId = parseInt(String(req.params.id), 10);
-  if (isNaN(plotId) || plotId < 0 || plotId > 99) {
-    res.status(400).json({ error: "Invalid plot ID" });
-    return;
-  }
-  try {
-    const result = await claimLand(req.auth!.playerId, plotId);
-    res.json({ success: true, ...result });
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : "Claim failed" });
   }
 });
 

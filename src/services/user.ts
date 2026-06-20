@@ -3,6 +3,9 @@ import { User, type IUser } from "../models/User";
 import { Skill } from "../models/Skill";
 import { RoomLayout } from "../models/RoomLayout";
 import { ensureResources, getBalances } from "./resources";
+import { abandonFrontierPlotsForOwner } from "./land";
+import { ensureDevStartingBalances } from "./devEconomy";
+import { MS_PER_DAY } from "../lib/constants";
 
 export async function findUserById(userId: string): Promise<IUser | null> {
   return User.findById(userId);
@@ -39,10 +42,16 @@ export async function bootstrapUser(input: {
     if (!user.lastCoinsClaimAt) {
       user.lastCoinsClaimAt = user.lastClaimAt ?? now;
     }
+    const inactivityCutoff = Date.now() - 7 * MS_PER_DAY;
+    if (user.lastLoginAt && user.lastLoginAt.getTime() < inactivityCutoff) {
+      await abandonFrontierPlotsForOwner(user._id.toString());
+    }
     user.lastLoginAt = now;
     await user.save();
     await ensureResources(user._id.toString());
   }
+
+  await ensureDevStartingBalances(user._id.toString());
 
   return { user, loginCoinsAwarded: 0 };
 }

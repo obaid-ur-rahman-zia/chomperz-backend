@@ -38,6 +38,7 @@ export function xpToNextLevel(skill: ActiveSkillType, level: number): number {
   }
 }
 
+/** Fixed action timers per FORMULAS.md (4s gather, 60s craft). */
 export function actionDurationMs(skill: ActiveSkillType): number {
   switch (skill) {
     case "woodcutting":

@@ -7,6 +7,9 @@ import {
   getSkillXp,
   setSkillLevel,
   addSkillXp,
+  ensurePlayerSkills,
+  getPlayerSkillEntry,
+  syncLegacyFieldsFromPlayerSkills,
 } from "../models/Skill";
 import { ACTIVE_SKILL_CONFIG } from "../data/activeSkills";
 import {
@@ -64,38 +67,46 @@ function skillSuccessPct(skillId: ActiveSkillType, level: number): number {
 }
 
 function levelUpIfReady(skill: ISkill, skillType: ActiveSkillType): void {
-  const level = getSkillLevel(skill, skillType);
-  const xp = getSkillXp(skill, skillType);
-  const needed = xpToNextLevel(skillType, level);
-  if (xp >= needed) {
-    setSkillLevel(skill, skillType, level + 1);
-    const overflow = xp - needed;
-    switch (skillType) {
-      case "woodcutting":
-        skill.woodcuttingXp = overflow;
-        break;
-      case "mining":
-        skill.miningXp = overflow;
-        break;
-      case "carpentry":
-        skill.carpentryXp = overflow;
-        break;
-      case "smithing":
-        skill.smithingXp = overflow;
-        break;
-    }
+  let level = getSkillLevel(skill, skillType);
+  let xp = getSkillXp(skill, skillType);
+  let needed = xpToNextLevel(skillType, level);
+  while (xp >= needed && level < 100) {
+    level += 1;
+    xp -= needed;
+    setSkillLevel(skill, skillType, level);
+    getPlayerSkillEntry(skill, skillType).xp = xp;
+    syncLegacyFieldsFromPlayerSkills(skill);
+    needed = xpToNextLevel(skillType, level);
   }
 }
 
+function serializePlayerSkills(skill: ISkill) {
+  ensurePlayerSkills(skill);
+  return skill.playerSkills.map((entry) => ({
+    skillName: entry.skillName,
+    level: entry.level,
+    xp: entry.xp,
+    active: entry.active,
+    actionDurationMs: actionDurationMs(entry.skillName),
+    successPct:
+      entry.skillName === "carpentry" || entry.skillName === "smithing"
+        ? 100
+        : Math.round(gatherYieldPct(entry.skillName, entry.level) * 10) / 10,
+  }));
+}
+
 export function serializeSkillsState(skill: ISkill, inventoryQty = 0, inputQty = 0) {
+  ensurePlayerSkills(skill);
   const selected = skill.selectedSkill ?? "woodcutting";
   const config = ACTIVE_SKILL_CONFIG[selected];
   const level = getSkillLevel(skill, selected);
   const xp = getSkillXp(skill, selected);
   const successPct = skillSuccessPct(selected, level);
+  const durationMs = actionDurationMs(selected);
 
   return {
     selectedSkill: selected,
+    playerSkills: serializePlayerSkills(skill),
     skills: ACTIVE_SKILL_TYPES.map((id) => {
       const cfg = ACTIVE_SKILL_CONFIG[id];
       const lvl = getSkillLevel(skill, id);
@@ -113,6 +124,7 @@ export function serializeSkillsState(skill: ISkill, inventoryQty = 0, inputQty =
         failPct: Math.round((100 - pct) * 10) / 10,
         inputItemId: inputItemId(id),
         inputQuantity: inputQuantity(id),
+        actionDurationMs: actionDurationMs(id),
       };
     }),
     selected: {
@@ -126,6 +138,8 @@ export function serializeSkillsState(skill: ISkill, inventoryQty = 0, inputQty =
       failPct: Math.round((100 - successPct) * 10) / 10,
       inputItemId: inputItemId(selected),
       inputQuantity: inputQuantity(selected),
+      actionDurationMs: durationMs,
+      actionDurationSec: durationMs / 1000,
     },
     action: resolveActionStatus(skill),
   };
@@ -136,6 +150,7 @@ export async function getSkillsPayload(userId: string) {
   if (!skill) throw new Error("Skill not found");
 
   await applyPendingStatUpgrades(skill);
+  ensurePlayerSkills(skill);
 
   const selected = skill.selectedSkill ?? "woodcutting";
   const config = ACTIVE_SKILL_CONFIG[selected];
@@ -152,7 +167,13 @@ export async function selectSkill(userId: string, skillType: ActiveSkillType) {
   if (skill.activeAction) {
     throw new Error("Cannot switch skills while an action is running");
   }
+
   skill.selectedSkill = skillType;
+  ensurePlayerSkills(skill);
+  for (const entry of skill.playerSkills) {
+    entry.active = entry.skillName === skillType;
+  }
+  syncLegacyFieldsFromPlayerSkills(skill);
   await skill.save();
   return getSkillsPayload(userId);
 }
@@ -190,6 +211,7 @@ export async function startAction(userId: string) {
     startedAt: new Date(),
     durationMs,
   };
+  syncLegacyFieldsFromPlayerSkills(skill);
   await skill.save();
 
   return getSkillsPayload(userId);
@@ -227,6 +249,7 @@ export async function completeAction(userId: string) {
   }
 
   skill.activeAction = null;
+  syncLegacyFieldsFromPlayerSkills(skill);
   await skill.save();
 
   const payload = await getSkillsPayload(userId);

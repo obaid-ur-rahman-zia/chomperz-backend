@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth";
 import { findUserById } from "../services/user";
+import { ensureDevStartingBalances } from "../services/devEconomy";
 import { ensureSkill, upgradeSkill, applyPendingStatUpgrades } from "../services/skills";
 import { serializePlayer } from "../services/player";
 import { getUserEconomy } from "../services/economy";
@@ -25,6 +26,7 @@ const router = Router();
 async function loadUserContext(userId: string) {
   const user = await findUserById(userId);
   if (!user) return null;
+  await ensureDevStartingBalances(userId);
   const skill = await ensureSkill(userId);
   await applyPendingStatUpgrades(skill);
   return { user, skill };

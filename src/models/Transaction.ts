@@ -9,7 +9,8 @@ export type TransactionKind =
   | "plot_bid"
   | "plot_purchase"
   | "rent_income"
-  | "skill_reward";
+  | "skill_reward"
+  | "dev_grant";
 
 export interface ITransaction extends Document {
   userId: Types.ObjectId;
@@ -34,6 +35,7 @@ const TransactionSchema = new Schema<ITransaction>(
         "plot_purchase",
         "rent_income",
         "skill_reward",
+        "dev_grant",
       ],
       required: true,
     },

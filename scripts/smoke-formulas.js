@@ -59,7 +59,7 @@ assert.strictEqual(xpToNextLevel("mining", 1), 100);
 assert.strictEqual(xpToNextLevel("carpentry", 1), 100);
 assert.strictEqual(xpToNextLevel("smithing", 1), 100);
 
-// ── Skill durations ──
+// ── Skill durations (FORMULAS.md fixed timers) ──
 assert.strictEqual(actionDurationMs("woodcutting"), 4000);
 assert.strictEqual(actionDurationMs("mining"), 4000);
 assert.strictEqual(actionDurationMs("carpentry"), 60000);
