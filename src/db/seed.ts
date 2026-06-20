@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { Land } from "../models/Land";
 import { getPlotName } from "../lib/economy";
+import { MS_PER_DAY } from "../lib/constants";
 
 export async function dropLegacyCollections(): Promise<void> {
   const db = mongoose.connection.db;
@@ -47,6 +48,24 @@ export async function seedLands(): Promise<void> {
   await seedDemoPlot();
 }
 
+function demoRenter(
+  walletAddress: string,
+  twitterHandle: string,
+  sevenDayBid: number
+) {
+  const now = new Date();
+  return {
+    walletAddress,
+    twitterHandle,
+    sevenDayBid,
+    dailyBid: Math.floor(sevenDayBid / 7),
+    escrowBalance: sevenDayBid,
+    leaseStartedAt: now,
+    leaseExpiresAt: new Date(now.getTime() + 7 * MS_PER_DAY),
+    lastRentPayoutAt: now,
+  };
+}
+
 export async function seedDemoPlot(): Promise<void> {
   await Land.updateOne(
     { plotId: 11 },
@@ -59,24 +78,9 @@ export async function seedDemoPlot(): Promise<void> {
         landlordHandle: "@DinoWhale",
         landlordAvatarUrl: "/images/chomper.jpg",
         renters: [
-          {
-            walletAddress: "0xchompking000000000000000000000000001",
-            twitterHandle: "@ChompKing",
-            dailyBid: 500,
-            escrowBalance: 5000,
-          },
-          {
-            walletAddress: "0xrexhunter00000000000000000000000001",
-            twitterHandle: "@RexHunter",
-            dailyBid: 450,
-            escrowBalance: 4500,
-          },
-          {
-            walletAddress: "0xjurassicx0000000000000000000000001",
-            twitterHandle: "@JurassicX",
-            dailyBid: 400,
-            escrowBalance: 4000,
-          },
+          demoRenter("0xchompking000000000000000000000000001", "@ChompKing", 3500),
+          demoRenter("0xrexhunter00000000000000000000000001", "@RexHunter", 3150),
+          demoRenter("0xjurassicx0000000000000000000000001", "@JurassicX", 2800),
         ],
       },
     }

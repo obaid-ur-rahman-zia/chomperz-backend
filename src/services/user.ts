@@ -2,8 +2,7 @@ import { Types } from "mongoose";
 import { User, type IUser } from "../models/User";
 import { Skill } from "../models/Skill";
 import { RoomLayout } from "../models/RoomLayout";
-import { ensureResources, creditBalance, getBalances } from "./resources";
-import { DAILY_LOGIN_COINS, MS_PER_DAY } from "../lib/constants";
+import { ensureResources, getBalances } from "./resources";
 
 export async function findUserById(userId: string): Promise<IUser | null> {
   return User.findById(userId);
@@ -19,8 +18,6 @@ export async function bootstrapUser(input: {
   profilePicUrl?: string;
 }): Promise<{ user: IUser; loginCoinsAwarded: number }> {
   const handle = input.username.startsWith("@") ? input.username : `@${input.username}`;
-  let loginCoinsAwarded = 0;
-
   let user = await User.findOne({ twitterId: input.twitterId });
   const now = new Date();
 
@@ -31,28 +28,23 @@ export async function bootstrapUser(input: {
       profilePicUrl: input.profilePicUrl ?? "",
       lastLoginAt: now,
       lastClaimAt: now,
+      lastCoinsClaimAt: now,
     });
     await Skill.create({ userId: user._id });
     await RoomLayout.create({ userId: user._id });
     await ensureResources(user._id.toString());
-    await creditBalance(user._id.toString(), "coins", DAILY_LOGIN_COINS, "daily_login");
-    loginCoinsAwarded = DAILY_LOGIN_COINS;
   } else {
     user.username = handle;
     if (input.profilePicUrl) user.profilePicUrl = input.profilePicUrl;
-
-    const elapsed = now.getTime() - user.lastLoginAt.getTime();
-    if (elapsed >= MS_PER_DAY) {
-      await creditBalance(user._id.toString(), "coins", DAILY_LOGIN_COINS, "daily_login");
-      loginCoinsAwarded = DAILY_LOGIN_COINS;
+    if (!user.lastCoinsClaimAt) {
+      user.lastCoinsClaimAt = user.lastClaimAt ?? now;
     }
-
     user.lastLoginAt = now;
     await user.save();
     await ensureResources(user._id.toString());
   }
 
-  return { user, loginCoinsAwarded };
+  return { user, loginCoinsAwarded: 0 };
 }
 
 export async function updateUserNftCache(
@@ -65,25 +57,6 @@ export async function updateUserNftCache(
 
 export async function resetUserNftCache(userId: string): Promise<void> {
   await User.updateOne({ _id: userId }, { $set: { nftCount: 0, multiplier: 1 } });
-}
-
-export async function claimDailyTask(userId: string): Promise<{ coins: number; awarded: number }> {
-  const user = await User.findById(userId);
-  if (!user) throw new Error("User not found");
-
-  const now = new Date();
-  if (user.lastDailyTaskAt) {
-    const elapsed = now.getTime() - user.lastDailyTaskAt.getTime();
-    if (elapsed < MS_PER_DAY) {
-      throw new Error("Daily task already claimed. Try again later.");
-    }
-  }
-
-  const { DAILY_TASK_COINS } = await import("../lib/constants");
-  const balance = await creditBalance(userId, "coins", DAILY_TASK_COINS, "daily_task");
-  user.lastDailyTaskAt = now;
-  await user.save();
-  return { coins: balance, awarded: DAILY_TASK_COINS };
 }
 
 export function userIdString(user: IUser | { _id: Types.ObjectId }): string {

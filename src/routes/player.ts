@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth";
-import { findUserById, claimDailyTask } from "../services/user";
-import { ensureSkill, upgradeSkill, applySpeedUpgradeIfReady } from "../services/skills";
+import { findUserById } from "../services/user";
+import { ensureSkill, upgradeSkill, applyPendingStatUpgrades } from "../services/skills";
 import { serializePlayer } from "../services/player";
 import { getUserEconomy } from "../services/economy";
 import { creditBalance } from "../services/resources";
@@ -14,9 +14,9 @@ import {
   startAction,
   completeAction,
   getActionStatus,
-  upgradeActiveSkill,
 } from "../services/activeSkills";
 import { getInventory } from "../services/inventory";
+import { calculatePendingCoins } from "../lib/formulas";
 import type { ActiveSkillType } from "../models/Skill";
 import { ACTIVE_SKILL_TYPES } from "../models/Skill";
 
@@ -26,7 +26,7 @@ async function loadUserContext(userId: string) {
   const user = await findUserById(userId);
   if (!user) return null;
   const skill = await ensureSkill(userId);
-  await applySpeedUpgradeIfReady(skill);
+  await applyPendingStatUpgrades(skill);
   return { user, skill };
 }
 
@@ -60,11 +60,39 @@ router.post("/claim", requireAuth, async (req: Request, res: Response) => {
   ctx.user.lastClaimAt = new Date();
   await ctx.user.save();
 
-  const updated = await getUserEconomy(ctx.user, ctx.skill);
   res.json({
     success: true,
     earned,
     zCoins,
+    player: await serializePlayer(ctx.user, ctx.skill),
+  });
+});
+
+router.post("/claim-coins", requireAuth, async (req: Request, res: Response) => {
+  const ctx = await loadUserContext(req.auth!.playerId);
+  if (!ctx) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  const lastCoinsClaimAt = ctx.user.lastCoinsClaimAt ?? ctx.user.lastClaimAt;
+  const earned = calculatePendingCoins(lastCoinsClaimAt);
+
+  const coins = await creditBalance(
+    ctx.user._id.toString(),
+    "coins",
+    earned,
+    "claim_coins",
+    { earned }
+  );
+
+  ctx.user.lastCoinsClaimAt = new Date();
+  await ctx.user.save();
+
+  res.json({
+    success: true,
+    earned,
+    coins,
     player: await serializePlayer(ctx.user, ctx.skill),
   });
 });
@@ -97,25 +125,6 @@ router.post("/sync-nfts", requireAuth, async (req: Request, res: Response) => {
     console.error("NFT sync error:", err);
     const msg = err instanceof Error ? err.message : "Failed to read NFTs from blockchain";
     res.status(500).json({ error: msg });
-  }
-});
-
-router.post("/daily-task", requireAuth, async (req: Request, res: Response) => {
-  try {
-    const result = await claimDailyTask(req.auth!.playerId);
-    const ctx = await loadUserContext(req.auth!.playerId);
-    if (!ctx) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
-    res.json({
-      success: true,
-      awarded: result.awarded,
-      coins: result.coins,
-      player: await serializePlayer(ctx.user, ctx.skill),
-    });
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : "Daily task failed" });
   }
 });
 
@@ -228,25 +237,6 @@ router.post("/skills/complete", requireAuth, async (req: Request, res: Response)
     res.json(await completeAction(req.auth!.playerId));
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Complete failed" });
-  }
-});
-
-router.post("/skills/upgrade", requireAuth, async (req: Request, res: Response) => {
-  const { skill } = req.body as { skill?: string };
-  if (!skill || !ACTIVE_SKILL_TYPES.includes(skill as ActiveSkillType)) {
-    res.status(400).json({ error: "Invalid skill" });
-    return;
-  }
-  try {
-    const payload = await upgradeActiveSkill(req.auth!.playerId, skill as ActiveSkillType);
-    const ctx = await loadUserContext(req.auth!.playerId);
-    res.json({
-      success: true,
-      ...payload,
-      player: ctx ? await serializePlayer(ctx.user, ctx.skill) : null,
-    });
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : "Upgrade failed" });
   }
 });
 

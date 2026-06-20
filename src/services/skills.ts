@@ -1,7 +1,7 @@
 import { Skill, type ISkill } from "../models/Skill";
 import { getUpgradeCost } from "../lib/economy";
+import { getUpgradeTimerMs } from "../lib/formulas";
 import { debitBalance } from "./resources";
-import { SPEED_UPGRADE_DURATION_MS } from "../data/activeSkills";
 
 export async function getSkill(userId: string): Promise<ISkill | null> {
   return Skill.findOne({ userId });
@@ -19,23 +19,56 @@ export async function ensureSkill(userId: string): Promise<ISkill> {
   return skill;
 }
 
-export async function applySpeedUpgradeIfReady(skill: ISkill): Promise<void> {
-  if (skill.speedUpgradingUntil && new Date() >= skill.speedUpgradingUntil) {
-    if (skill.speedLvl < 100) {
-      skill.speedLvl += 1;
-    }
+function applyCompletedUpgrade(skill: ISkill, stat: "power" | "speed"): void {
+  if (stat === "power" && skill.powerLvl < 100) {
+    skill.powerLvl += 1;
+    skill.powerUpgradingUntil = null;
+  } else if (stat === "speed" && skill.speedLvl < 100) {
+    skill.speedLvl += 1;
     skill.speedUpgradingUntil = null;
-    await skill.save();
   }
 }
 
+export async function applyPendingStatUpgrades(skill: ISkill): Promise<void> {
+  const now = new Date();
+  let changed = false;
+
+  if (skill.powerUpgradingUntil && now >= skill.powerUpgradingUntil) {
+    applyCompletedUpgrade(skill, "power");
+    changed = true;
+  }
+  if (skill.speedUpgradingUntil && now >= skill.speedUpgradingUntil) {
+    applyCompletedUpgrade(skill, "speed");
+    changed = true;
+  }
+
+  if (changed) await skill.save();
+}
+
+/** @deprecated use applyPendingStatUpgrades */
+export async function applySpeedUpgradeIfReady(skill: ISkill): Promise<void> {
+  return applyPendingStatUpgrades(skill);
+}
+
+function getUpgradeRemainingMs(until: Date | null): number {
+  if (!until) return 0;
+  return Math.max(0, until.getTime() - Date.now());
+}
+
 export function getSpeedUpgradeRemainingMs(skill: ISkill): number {
-  if (!skill.speedUpgradingUntil) return 0;
-  return Math.max(0, skill.speedUpgradingUntil.getTime() - Date.now());
+  return getUpgradeRemainingMs(skill.speedUpgradingUntil);
+}
+
+export function getPowerUpgradeRemainingMs(skill: ISkill): number {
+  return getUpgradeRemainingMs(skill.powerUpgradingUntil);
 }
 
 export function isSpeedUpgrading(skill: ISkill): boolean {
   return getSpeedUpgradeRemainingMs(skill) > 0;
+}
+
+export function isPowerUpgrading(skill: ISkill): boolean {
+  return getPowerUpgradeRemainingMs(skill) > 0;
 }
 
 export async function upgradeSkill(
@@ -43,13 +76,16 @@ export async function upgradeSkill(
   stat: "power" | "speed"
 ): Promise<{ skill: ISkill; zCoins: number }> {
   const skill = await ensureSkill(userId);
-  await applySpeedUpgradeIfReady(skill);
+  await applyPendingStatUpgrades(skill);
 
   const level = stat === "power" ? skill.powerLvl : skill.speedLvl;
   if (level >= 100) {
     throw new Error("Max level reached");
   }
 
+  if (stat === "power" && isPowerUpgrading(skill)) {
+    throw new Error("Power upgrade already in progress");
+  }
   if (stat === "speed" && isSpeedUpgrading(skill)) {
     throw new Error("Speed upgrade already in progress");
   }
@@ -57,10 +93,13 @@ export async function upgradeSkill(
   const cost = getUpgradeCost(level);
   const zCoins = await debitBalance(userId, "zCoins", cost, "upgrade", { stat, fromLevel: level });
 
+  const timerMs = getUpgradeTimerMs(level);
+  const until = new Date(Date.now() + timerMs);
+
   if (stat === "power") {
-    skill.powerLvl += 1;
+    skill.powerUpgradingUntil = until;
   } else {
-    skill.speedUpgradingUntil = new Date(Date.now() + SPEED_UPGRADE_DURATION_MS);
+    skill.speedUpgradingUntil = until;
   }
 
   await skill.save();

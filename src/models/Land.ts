@@ -4,8 +4,14 @@ import type { PlotStatus } from "../lib/economy";
 export interface IRenter {
   walletAddress: string;
   twitterHandle: string;
+  /** Whole Z-Coins paid for 7-day lease */
+  sevenDayBid: number;
+  /** Derived daily rate (sevenDayBid / 7) for display */
   dailyBid: number;
   escrowBalance: number;
+  leaseStartedAt: Date;
+  leaseExpiresAt: Date;
+  lastRentPayoutAt: Date | null;
 }
 
 export interface ILand extends Document {
@@ -27,8 +33,12 @@ const RenterSchema = new Schema<IRenter>(
   {
     walletAddress: { type: String, required: true },
     twitterHandle: { type: String, default: "" },
+    sevenDayBid: { type: Number, required: true },
     dailyBid: { type: Number, required: true },
     escrowBalance: { type: Number, required: true },
+    leaseStartedAt: { type: Date, required: true },
+    leaseExpiresAt: { type: Date, required: true },
+    lastRentPayoutAt: { type: Date, default: null },
   },
   { _id: false }
 );

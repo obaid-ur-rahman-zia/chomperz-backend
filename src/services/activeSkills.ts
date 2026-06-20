@@ -7,16 +7,19 @@ import {
   getSkillXp,
   setSkillLevel,
   addSkillXp,
-  xpToNextLevel,
 } from "../models/Skill";
+import { ACTIVE_SKILL_CONFIG } from "../data/activeSkills";
 import {
-  ACTIVE_SKILL_CONFIG,
-  activeSkillUpgradeCost,
-  computeActionDurationMs,
-} from "../data/activeSkills";
-import { debitBalance } from "./resources";
-import { addItem } from "./inventory";
-import { applySpeedUpgradeIfReady } from "./skills";
+  actionDurationMs,
+  gatherYieldPct,
+  xpToNextLevel,
+  GATHER_XP,
+  CRAFT_XP,
+  inputItemId,
+  inputQuantity,
+} from "../lib/formulas";
+import { addItem, removeItem, getItemQuantity } from "./inventory";
+import { applyPendingStatUpgrades } from "./skills";
 
 export interface ActionStatus {
   state: "idle" | "running" | "completed";
@@ -55,11 +58,41 @@ function resolveActionStatus(skill: ISkill): ActionStatus {
   };
 }
 
-export function serializeSkillsState(skill: ISkill, inventoryQty = 0) {
+function skillSuccessPct(skillId: ActiveSkillType, level: number): number {
+  if (skillId === "carpentry" || skillId === "smithing") return 100;
+  return gatherYieldPct(skillId, level);
+}
+
+function levelUpIfReady(skill: ISkill, skillType: ActiveSkillType): void {
+  const level = getSkillLevel(skill, skillType);
+  const xp = getSkillXp(skill, skillType);
+  const needed = xpToNextLevel(skillType, level);
+  if (xp >= needed) {
+    setSkillLevel(skill, skillType, level + 1);
+    const overflow = xp - needed;
+    switch (skillType) {
+      case "woodcutting":
+        skill.woodcuttingXp = overflow;
+        break;
+      case "mining":
+        skill.miningXp = overflow;
+        break;
+      case "carpentry":
+        skill.carpentryXp = overflow;
+        break;
+      case "smithing":
+        skill.smithingXp = overflow;
+        break;
+    }
+  }
+}
+
+export function serializeSkillsState(skill: ISkill, inventoryQty = 0, inputQty = 0) {
   const selected = skill.selectedSkill ?? "woodcutting";
   const config = ACTIVE_SKILL_CONFIG[selected];
   const level = getSkillLevel(skill, selected);
   const xp = getSkillXp(skill, selected);
+  const successPct = skillSuccessPct(selected, level);
 
   return {
     selectedSkill: selected,
@@ -67,26 +100,32 @@ export function serializeSkillsState(skill: ISkill, inventoryQty = 0) {
       const cfg = ACTIVE_SKILL_CONFIG[id];
       const lvl = getSkillLevel(skill, id);
       const skillXp = getSkillXp(skill, id);
+      const pct = skillSuccessPct(id, lvl);
       return {
         id,
         label: cfg.label,
         level: lvl,
         xp: skillXp,
-        xpToNext: xpToNextLevel(lvl),
-        upgradeCost: activeSkillUpgradeCost(lvl),
+        xpToNext: xpToNextLevel(id, lvl),
         rewardItemId: cfg.rewardItemId,
         rewardItemLabel: cfg.rewardItemLabel,
-        successPct: cfg.successPct,
-        failPct: cfg.failPct,
+        successPct: Math.round(pct * 10) / 10,
+        failPct: Math.round((100 - pct) * 10) / 10,
+        inputItemId: inputItemId(id),
+        inputQuantity: inputQuantity(id),
       };
     }),
     selected: {
       ...config,
       level,
       xp,
-      xpToNext: xpToNextLevel(level),
-      upgradeCost: activeSkillUpgradeCost(level),
+      xpToNext: xpToNextLevel(selected, level),
       inventoryQty,
+      inputQty,
+      successPct: Math.round(successPct * 10) / 10,
+      failPct: Math.round((100 - successPct) * 10) / 10,
+      inputItemId: inputItemId(selected),
+      inputQuantity: inputQuantity(selected),
     },
     action: resolveActionStatus(skill),
   };
@@ -96,14 +135,15 @@ export async function getSkillsPayload(userId: string) {
   const skill = await Skill.findOne({ userId });
   if (!skill) throw new Error("Skill not found");
 
-  await applySpeedUpgradeIfReady(skill);
+  await applyPendingStatUpgrades(skill);
 
   const selected = skill.selectedSkill ?? "woodcutting";
   const config = ACTIVE_SKILL_CONFIG[selected];
-  const { getItemQuantity } = await import("./inventory");
   const inventoryQty = await getItemQuantity(userId, config.rewardItemId);
+  const inputId = inputItemId(selected);
+  const inputQty = inputId ? await getItemQuantity(userId, inputId) : 0;
 
-  return serializeSkillsState(skill, inventoryQty);
+  return serializeSkillsState(skill, inventoryQty, inputQty);
 }
 
 export async function selectSkill(userId: string, skillType: ActiveSkillType) {
@@ -121,7 +161,7 @@ export async function startAction(userId: string) {
   const skill = await Skill.findOne({ userId });
   if (!skill) throw new Error("Skill not found");
 
-  await applySpeedUpgradeIfReady(skill);
+  await applyPendingStatUpgrades(skill);
 
   if (skill.activeAction) {
     const status = resolveActionStatus(skill);
@@ -132,8 +172,18 @@ export async function startAction(userId: string) {
   }
 
   const selected = skill.selectedSkill ?? "woodcutting";
-  const config = ACTIVE_SKILL_CONFIG[selected];
-  const durationMs = computeActionDurationMs(config.baseDurationMs, skill.speedLvl);
+  const matId = inputItemId(selected);
+  const matQty = inputQuantity(selected);
+
+  if (matId && matQty > 0) {
+    const have = await getItemQuantity(userId, matId);
+    if (have < matQty) {
+      throw new Error(`Need ${matQty} ${matId} to start`);
+    }
+    await removeItem(userId, matId, matQty);
+  }
+
+  const durationMs = actionDurationMs(selected);
 
   skill.activeAction = {
     skill: selected,
@@ -160,34 +210,20 @@ export async function completeAction(userId: string) {
   }
 
   const config = ACTIVE_SKILL_CONFIG[action.skill];
-  const success = Math.random() * 100 < config.successPct;
+  const level = getSkillLevel(skill, action.skill);
+  const isCraft = action.skill === "carpentry" || action.skill === "smithing";
+  const successPct = skillSuccessPct(action.skill, level);
+  const success = isCraft || Math.random() * 100 < successPct;
 
   let rewardQty = 0;
+  let xpGained = 0;
+
   if (success) {
     rewardQty = 1;
     await addItem(userId, config.rewardItemId, 1);
-    addSkillXp(skill, action.skill, config.xpPerSuccess);
-
-    const level = getSkillLevel(skill, action.skill);
-    const xp = getSkillXp(skill, action.skill);
-    const needed = xpToNextLevel(level);
-    if (xp >= needed) {
-      setSkillLevel(skill, action.skill, level + 1);
-      switch (action.skill) {
-        case "woodcutting":
-          skill.woodcuttingXp = xp - needed;
-          break;
-        case "mining":
-          skill.miningXp = xp - needed;
-          break;
-        case "carpentry":
-          skill.carpentryXp = xp - needed;
-          break;
-        case "smithing":
-          skill.smithingXp = xp - needed;
-          break;
-      }
-    }
+    xpGained = isCraft ? CRAFT_XP : GATHER_XP;
+    addSkillXp(skill, action.skill, xpGained);
+    levelUpIfReady(skill, action.skill);
   }
 
   skill.activeAction = null;
@@ -200,7 +236,7 @@ export async function completeAction(userId: string) {
       success,
       rewardItemId: success ? config.rewardItemId : null,
       rewardQty,
-      xpGained: success ? config.xpPerSuccess : 0,
+      xpGained,
     },
   };
 }
@@ -209,22 +245,4 @@ export async function getActionStatus(userId: string) {
   const skill = await Skill.findOne({ userId });
   if (!skill) throw new Error("Skill not found");
   return resolveActionStatus(skill);
-}
-
-export async function upgradeActiveSkill(userId: string, skillType: ActiveSkillType) {
-  const skill = await Skill.findOne({ userId });
-  if (!skill) throw new Error("Skill not found");
-
-  const level = getSkillLevel(skill, skillType);
-  const cost = activeSkillUpgradeCost(level);
-
-  await debitBalance(userId, "coins", cost, "active_skill_upgrade", {
-    skill: skillType,
-    fromLevel: level,
-  });
-
-  setSkillLevel(skill, skillType, level + 1);
-  await skill.save();
-
-  return getSkillsPayload(userId);
 }

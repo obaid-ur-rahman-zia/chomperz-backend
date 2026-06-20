@@ -8,7 +8,7 @@ export interface IUser extends Document {
   multiplier: number;
   lastLoginAt: Date;
   lastClaimAt: Date;
-  lastDailyTaskAt: Date | null;
+  lastCoinsClaimAt: Date;
 }
 
 const UserSchema = new Schema<IUser>(
@@ -20,7 +20,7 @@ const UserSchema = new Schema<IUser>(
     multiplier: { type: Number, default: 1 },
     lastLoginAt: { type: Date, default: Date.now },
     lastClaimAt: { type: Date, default: Date.now },
-    lastDailyTaskAt: { type: Date, default: null },
+    lastCoinsClaimAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );

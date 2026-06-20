@@ -22,6 +22,7 @@ export interface ISkill extends Document {
   carpentryXp: number;
   smithingXp: number;
   speedUpgradingUntil: Date | null;
+  powerUpgradingUntil: Date | null;
   activeAction: IActiveAction | null;
 }
 
@@ -57,6 +58,7 @@ const SkillSchema = new Schema<ISkill>(
     carpentryXp: { type: Number, default: 0 },
     smithingXp: { type: Number, default: 0 },
     speedUpgradingUntil: { type: Date, default: null },
+    powerUpgradingUntil: { type: Date, default: null },
     activeAction: { type: ActiveActionSchema, default: null },
   },
   { timestamps: true }
@@ -129,8 +131,4 @@ export function addSkillXp(skill: ISkill, type: ActiveSkillType, xp: number): vo
       skill.smithingXp += xp;
       break;
   }
-}
-
-export function xpToNextLevel(level: number): number {
-  return level * 50;
 }

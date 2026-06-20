@@ -3,13 +3,13 @@ import type { CurrencyType } from "./Resource";
 
 export type TransactionKind =
   | "claim"
+  | "claim_coins"
   | "upgrade"
   | "crib_buy"
   | "plot_bid"
-  | "daily_login"
-  | "daily_task"
-  | "skill_reward"
-  | "active_skill_upgrade";
+  | "plot_purchase"
+  | "rent_income"
+  | "skill_reward";
 
 export interface ITransaction extends Document {
   userId: Types.ObjectId;
@@ -27,13 +27,13 @@ const TransactionSchema = new Schema<ITransaction>(
       type: String,
       enum: [
         "claim",
+        "claim_coins",
         "upgrade",
         "crib_buy",
         "plot_bid",
-        "daily_login",
-        "daily_task",
+        "plot_purchase",
+        "rent_income",
         "skill_reward",
-        "active_skill_upgrade",
       ],
       required: true,
     },

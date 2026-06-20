@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth";
-import { listLands, getLandDetail, placeBid } from "../services/land";
+import { listLands, getLandDetail, placeBid, purchaseLand } from "../services/land";
 
 const router = Router();
 
@@ -34,6 +34,20 @@ router.get("/:id", async (req: Request, res: Response) => {
   res.json({ plot });
 });
 
+router.post("/:id/purchase", requireAuth, async (req: Request, res: Response) => {
+  const plotId = parseInt(String(req.params.id), 10);
+  if (isNaN(plotId) || plotId < 0 || plotId > 99) {
+    res.status(400).json({ error: "Invalid plot ID" });
+    return;
+  }
+  try {
+    const result = await purchaseLand(req.auth!.playerId, plotId);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Purchase failed" });
+  }
+});
+
 router.post("/:id/bid", requireAuth, async (req: Request, res: Response) => {
   const plotId = parseInt(String(req.params.id), 10);
   const { amount } = req.body as { amount?: number };
@@ -41,8 +55,8 @@ router.post("/:id/bid", requireAuth, async (req: Request, res: Response) => {
     res.status(400).json({ error: "Invalid plot ID" });
     return;
   }
-  if (!amount || amount < 1) {
-    res.status(400).json({ error: "Valid bid amount required" });
+  if (!amount || !Number.isInteger(amount) || amount < 7) {
+    res.status(400).json({ error: "Valid whole-number 7-day bid required (min 7 Z-Coins)" });
     return;
   }
 
@@ -51,8 +65,7 @@ router.post("/:id/bid", requireAuth, async (req: Request, res: Response) => {
     res.json({ success: true, ...result });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Bid failed";
-    const status = msg.includes("Need") || msg.includes("Minimum") ? 400 : 400;
-    res.status(status).json({ error: msg });
+    res.status(400).json({ error: msg });
   }
 });
 
