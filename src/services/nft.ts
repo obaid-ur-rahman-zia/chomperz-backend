@@ -101,32 +101,101 @@ async function enumerateByIndex(
   contract: ethers.Contract,
   wallet: string,
   balance: number
-): Promise<NftToken[]> {
-  const tokens: NftToken[] = [];
-  for (let i = 0; i < balance; i++) {
-    const tokenId = Number(await contract.tokenOfOwnerByIndex(wallet, i));
-    let rarity = defaultRarityFromTokenId(tokenId);
-    rarity = await enrichRarityFromMetadata(contract, tokenId, rarity);
-    tokens.push({ tokenId, rarity });
+): Promise<NftToken[] | null> {
+  try {
+    const tokens: NftToken[] = [];
+    for (let i = 0; i < balance; i++) {
+      const tokenId = Number(await contract.tokenOfOwnerByIndex(wallet, i));
+      let rarity = defaultRarityFromTokenId(tokenId);
+      rarity = await enrichRarityFromMetadata(contract, tokenId, rarity);
+      tokens.push({ tokenId, rarity });
+    }
+    return tokens;
+  } catch {
+    return null;
   }
-  return tokens;
+}
+
+function getAlchemyNftApiBase(): string | null {
+  const rpc = process.env.RPC_URL ?? "";
+  const match = rpc.match(/alchemy\.com\/v2\/([^/?]+)/i);
+  if (!match) return null;
+
+  let network = "eth-mainnet";
+  if (/sepolia/i.test(rpc)) network = "eth-sepolia";
+  else if (/base-mainnet|base\.g\.alchemy/i.test(rpc)) network = "base-mainnet";
+  else if (/polygon/i.test(rpc)) network = "polygon-mainnet";
+
+  return `https://${network}.g.alchemy.com/nft/v3/${match[1]}`;
+}
+
+async function fetchNftsViaAlchemy(
+  walletAddress: string,
+  contractAddress: string
+): Promise<NftToken[] | null> {
+  const base = getAlchemyNftApiBase();
+  if (!base) return null;
+
+  const url = new URL(`${base}/getNFTsForOwner`);
+  url.searchParams.set("owner", walletAddress);
+  url.searchParams.append("contractAddresses[]", contractAddress);
+  url.searchParams.set("withMetadata", "true");
+
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return null;
+
+    const body = (await res.json()) as {
+      ownedNfts?: Array<{
+        tokenId?: string;
+        id?: { tokenId?: string };
+        metadata?: unknown;
+        raw?: { metadata?: unknown };
+      }>;
+    };
+
+    const tokens: NftToken[] = [];
+    for (const nft of body.ownedNfts ?? []) {
+      const rawId = nft.tokenId ?? nft.id?.tokenId;
+      if (!rawId) continue;
+      const tokenId = rawId.startsWith("0x")
+        ? Number(BigInt(rawId))
+        : parseInt(rawId, 10);
+      if (!Number.isFinite(tokenId)) continue;
+
+      let rarity = defaultRarityFromTokenId(tokenId);
+      const metaRarity = parseRarityFromMetadata(nft.metadata ?? nft.raw?.metadata);
+      if (metaRarity) rarity = metaRarity;
+      tokens.push({ tokenId, rarity });
+    }
+
+    return tokens.length > 0 ? tokens : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readChainNfts(walletAddress: string): Promise<NftToken[]> {
   const contract = getContract();
+  const contractAddress = getNftContractAddress();
   const wallet = walletAddress.toLowerCase();
   const balance = Number(await contract.balanceOf(wallet));
 
   if (balance === 0) return [];
 
   let nfts = await tryGetTokensOfOwner(contract, wallet);
+
   if (!nfts || nfts.length === 0) {
     nfts = await enumerateByIndex(contract, wallet, balance);
   }
 
-  if (nfts.length === 0) {
+  if (!nfts || nfts.length === 0) {
+    nfts = await fetchNftsViaAlchemy(wallet, contractAddress);
+  }
+
+  if (!nfts || nfts.length === 0) {
     throw new Error(
-      `Wallet holds ${balance} NFT(s) but could not enumerate token IDs from contract`
+      `Wallet holds ${balance} NFT(s) but could not read token IDs. Use an Alchemy RPC_URL for standard ERC-721 contracts without on-chain enumeration.`
     );
   }
 
