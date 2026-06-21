@@ -9,6 +9,7 @@ if (process.env.VERCEL !== "1") {
 import mongoose from "mongoose";
 import { Server as SocketIOServer } from "socket.io";
 import { createApp } from "./app";
+import { validateNftContractConfig } from "./config/nftContract";
 import { bootstrapDatabase } from "./db/bootstrap";
 import { initTerritorySocket } from "./socket/territory";
 
@@ -53,6 +54,7 @@ const PORT = process.env.PORT || 3001;
 if (process.env.VERCEL !== "1") {
   ensureDb()
     .then(() => {
+      validateNftContractConfig();
       console.log("MongoDB connected");
       const server = http.createServer(app);
       const webUrl = process.env.WEB_URL || "http://localhost:3000";

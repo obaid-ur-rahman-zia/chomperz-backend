@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
+import { getNftContractAddress } from "../config/nftContract";
 import {
   syncLegendaryPlotOwner,
   clearLegendaryPlotOwner,
@@ -7,10 +8,6 @@ import {
 } from "../services/legendaryLand";
 
 const router = Router();
-
-function getContractAddress(): string {
-  return (process.env.CONTRACT_ADDRESS ?? "").toLowerCase();
-}
 
 function verifyAlchemySignature(body: string, signature: string | undefined): boolean {
   const signingKey = process.env.ALCHEMY_WEBHOOK_SIGNING_KEY;
@@ -56,7 +53,13 @@ router.post("/nft-transfer", async (req: Request, res: Response) => {
     return;
   }
 
-  const contractAddress = getContractAddress();
+  let contractAddress: string;
+  try {
+    contractAddress = getNftContractAddress();
+  } catch {
+    res.status(503).json({ error: "NFT contract not configured" });
+    return;
+  }
   const body = req.body as AlchemyWebhookBody;
   const activities = body.event?.activity ?? [];
 

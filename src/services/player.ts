@@ -12,6 +12,11 @@ import {
   isSpeedUpgrading,
   isPowerUpgrading,
 } from "./skills";
+import {
+  getNftCollectionName,
+  getNftContractAddress,
+  isUsingDevNftContract,
+} from "../config/nftContract";
 import { Nft } from "../models/Nft";
 import { getSkillsPayload } from "./activeSkills";
 
@@ -26,6 +31,17 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
   const activeSkills = await getSkillsPayload(userId);
   const lastCoinsClaimAt = user.lastCoinsClaimAt ?? user.lastClaimAt;
   const pendingCoins = calculatePendingCoins(lastCoinsClaimAt);
+
+  let nftCollectionName = "Chomperz";
+  let nftContractAddress: string | null = null;
+  let isDevNftCollection = false;
+  try {
+    nftCollectionName = getNftCollectionName();
+    nftContractAddress = getNftContractAddress();
+    isDevNftCollection = isUsingDevNftContract();
+  } catch {
+    /* NFT contract optional until wallet sync */
+  }
 
   return {
     id: user._id,
@@ -55,6 +71,9 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
     cachedNftCount: economy.breakdown.nftCount,
     cachedTokenIds: tokenDocs.map((t) => t.tokenId),
     nfts,
+    nftCollectionName,
+    nftContractAddress,
+    isDevNftCollection,
     chomperLabel: getChomperLabel(economy.nfts),
     activeSkills,
     economy: {

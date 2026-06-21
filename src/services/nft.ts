@@ -5,6 +5,7 @@ import {
   type NftToken,
   type RarityTier,
 } from "../lib/economy";
+import { getNftContractAddress } from "../config/nftContract";
 import { Nft } from "../models/Nft";
 import { updateUserNftCache } from "./user";
 
@@ -22,18 +23,12 @@ const RARITY_ENUM_MAP: Record<number, RarityTier> = {
   3: "legendary",
 };
 
-function getContractAddress(): string {
-  const address = process.env.CONTRACT_ADDRESS;
-  if (!address) throw new Error("CONTRACT_ADDRESS must be set");
-  return address.toLowerCase();
-}
-
 function getContract(): ethers.Contract {
   const rpcUrl = process.env.RPC_URL;
-  const address = process.env.CONTRACT_ADDRESS;
-  if (!rpcUrl || !address) {
-    throw new Error("RPC_URL and CONTRACT_ADDRESS must be set");
+  if (!rpcUrl) {
+    throw new Error("RPC_URL must be set");
   }
+  const address = getNftContractAddress();
   return new ethers.Contract(address, ERC721_ABI, new ethers.JsonRpcProvider(rpcUrl));
 }
 
@@ -143,7 +138,7 @@ export async function syncUserNfts(
   userId: string,
   walletAddress: string
 ): Promise<{ nfts: NftToken[]; count: number; multiplier: number }> {
-  const contractAddress = getContractAddress();
+  const contractAddress = getNftContractAddress();
   const chainNfts = await readChainNfts(walletAddress);
 
   await Nft.deleteMany({ userId });
@@ -186,9 +181,10 @@ export async function syncUserNfts(
 }
 
 export function validateChainConfig(): void {
-  if (!process.env.RPC_URL || !process.env.CONTRACT_ADDRESS) {
-    throw new Error("RPC_URL and CONTRACT_ADDRESS must be configured");
+  if (!process.env.RPC_URL) {
+    throw new Error("RPC_URL must be configured");
   }
+  getNftContractAddress();
 }
 
 export function validateChainId(chainId: number): void {
