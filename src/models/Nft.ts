@@ -7,6 +7,7 @@ export interface INft extends Document {
   tokenId: number;
   rarity: RarityTier;
   metadataUri: string;
+  imageUrl: string;
   lastSyncedAt: Date;
 }
 
@@ -21,6 +22,7 @@ const NftSchema = new Schema<INft>(
       required: true,
     },
     metadataUri: { type: String, default: "" },
+    imageUrl: { type: String, default: "" },
     lastSyncedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

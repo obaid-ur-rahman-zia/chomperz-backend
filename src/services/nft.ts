@@ -6,8 +6,10 @@ import {
   type RarityTier,
 } from "../lib/economy";
 import { getNftContractAddress } from "../config/nftContract";
+import { resolveRarity } from "./collectionConfig";
 import { Nft } from "../models/Nft";
 import { updateUserNftCache } from "./user";
+import { getWalletAddress } from "./wallet";
 
 const ERC721_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -60,6 +62,40 @@ async function fetchMetadataRarity(tokenURI: string): Promise<RarityTier | null>
   } catch {
     return null;
   }
+}
+
+function parseImageFromMetadata(json: unknown): string | null {
+  if (!json || typeof json !== "object") return null;
+  const obj = json as Record<string, unknown>;
+  const image = obj.image;
+  if (typeof image !== "string" || !image.trim()) return null;
+  if (image.startsWith("ipfs://")) {
+    return `https://ipfs.io/ipfs/${image.slice(7)}`;
+  }
+  return image;
+}
+
+async function fetchMetadataImage(tokenURI: string): Promise<string> {
+  try {
+    const url = tokenURI.startsWith("ipfs://")
+      ? `https://ipfs.io/ipfs/${tokenURI.slice(7)}`
+      : tokenURI;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return "";
+    const json = await res.json();
+    return parseImageFromMetadata(json) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+async function applyRarityOverrides(nfts: NftToken[]): Promise<NftToken[]> {
+  return Promise.all(
+    nfts.map(async (n) => ({
+      tokenId: n.tokenId,
+      rarity: await resolveRarity(n.tokenId, n.rarity),
+    }))
+  );
 }
 
 async function enrichRarityFromMetadata(
@@ -129,6 +165,100 @@ function getAlchemyNftApiBase(): string | null {
   return `https://${network}.g.alchemy.com/nft/v3/${match[1]}`;
 }
 
+function parseAlchemyImage(nft: {
+  metadata?: unknown;
+  raw?: { metadata?: unknown };
+  image?: { cachedUrl?: string; originalUrl?: string; thumbnailUrl?: string };
+}): string {
+  const cached = nft.image?.cachedUrl;
+  if (cached) return cached;
+  const original = nft.image?.originalUrl ?? nft.image?.thumbnailUrl;
+  if (original) return original;
+  return parseImageFromMetadata(nft.metadata ?? nft.raw?.metadata) ?? "";
+}
+
+async function fetchAlchemyNftMediaMap(
+  walletAddress: string,
+  contractAddress: string
+): Promise<Map<number, { imageUrl: string; metadataUri: string }>> {
+  const map = new Map<number, { imageUrl: string; metadataUri: string }>();
+  const base = getAlchemyNftApiBase();
+  if (!base) return map;
+
+  const url = new URL(`${base}/getNFTsForOwner`);
+  url.searchParams.set("owner", walletAddress);
+  url.searchParams.append("contractAddresses[]", contractAddress);
+  url.searchParams.set("withMetadata", "true");
+
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return map;
+
+    const body = (await res.json()) as {
+      ownedNfts?: Array<{
+        tokenId?: string;
+        id?: { tokenId?: string };
+        tokenUri?: string;
+        metadata?: unknown;
+        raw?: { metadata?: unknown; tokenUri?: string };
+        image?: { cachedUrl?: string; originalUrl?: string; thumbnailUrl?: string };
+      }>;
+    };
+
+    for (const nft of body.ownedNfts ?? []) {
+      const rawId = nft.tokenId ?? nft.id?.tokenId;
+      if (!rawId) continue;
+      const tokenId = rawId.startsWith("0x")
+        ? Number(BigInt(rawId))
+        : parseInt(rawId, 10);
+      if (!Number.isFinite(tokenId)) continue;
+
+      const metadataUri = nft.tokenUri ?? nft.raw?.tokenUri ?? "";
+      map.set(tokenId, {
+        imageUrl: parseAlchemyImage(nft),
+        metadataUri: typeof metadataUri === "string" ? metadataUri : "",
+      });
+    }
+  } catch {
+    /* optional enrichment */
+  }
+
+  return map;
+}
+
+export async function ensureNftImageUrl(userId: string, tokenId: number): Promise<string> {
+  const doc = await Nft.findOne({ userId, tokenId });
+  if (!doc) return "";
+  if (doc.imageUrl) return doc.imageUrl;
+
+  const wallet = await getWalletAddress(userId);
+  if (wallet) {
+    const media = await fetchAlchemyNftMediaMap(wallet, getNftContractAddress());
+    const fromAlchemy = media.get(tokenId);
+    if (fromAlchemy?.imageUrl) {
+      doc.imageUrl = fromAlchemy.imageUrl;
+      if (fromAlchemy.metadataUri) doc.metadataUri = fromAlchemy.metadataUri;
+      await doc.save();
+      return doc.imageUrl;
+    }
+  }
+
+  try {
+    const contract = getContract();
+    const metadataUri = String(await contract.tokenURI(tokenId));
+    const imageUrl = await fetchMetadataImage(metadataUri);
+    if (imageUrl) {
+      doc.metadataUri = metadataUri;
+      doc.imageUrl = imageUrl;
+      await doc.save();
+    }
+  } catch {
+    /* optional */
+  }
+
+  return doc.imageUrl ?? "";
+}
+
 async function fetchNftsViaAlchemy(
   walletAddress: string,
   contractAddress: string
@@ -164,7 +294,8 @@ async function fetchNftsViaAlchemy(
       if (!Number.isFinite(tokenId)) continue;
 
       let rarity = defaultRarityFromTokenId(tokenId);
-      const metaRarity = parseRarityFromMetadata(nft.metadata ?? nft.raw?.metadata);
+      const meta = nft.metadata ?? nft.raw?.metadata;
+      const metaRarity = parseRarityFromMetadata(meta);
       if (metaRarity) rarity = metaRarity;
       tokens.push({ tokenId, rarity });
     }
@@ -208,7 +339,12 @@ export async function syncUserNfts(
   walletAddress: string
 ): Promise<{ nfts: NftToken[]; count: number; multiplier: number }> {
   const contractAddress = getNftContractAddress();
-  const chainNfts = await readChainNfts(walletAddress);
+  const rawChainNfts = await readChainNfts(walletAddress);
+  const chainNfts = await applyRarityOverrides(rawChainNfts);
+  const alchemyMedia = await fetchAlchemyNftMediaMap(
+    walletAddress.toLowerCase(),
+    contractAddress
+  );
 
   await Nft.deleteMany({ userId });
 
@@ -217,11 +353,18 @@ export async function syncUserNfts(
     await Nft.insertMany(
       await Promise.all(
         chainNfts.map(async (n) => {
-          let metadataUri = "";
-          try {
-            metadataUri = String(await contract.tokenURI(n.tokenId));
-          } catch {
-            /* optional */
+          const fromAlchemy = alchemyMedia.get(n.tokenId);
+          let metadataUri = fromAlchemy?.metadataUri ?? "";
+          let imageUrl = fromAlchemy?.imageUrl ?? "";
+          if (!imageUrl) {
+            try {
+              if (!metadataUri) {
+                metadataUri = String(await contract.tokenURI(n.tokenId));
+              }
+              imageUrl = await fetchMetadataImage(metadataUri);
+            } catch {
+              /* optional */
+            }
           }
           return {
             userId,
@@ -229,6 +372,7 @@ export async function syncUserNfts(
             tokenId: n.tokenId,
             rarity: n.rarity,
             metadataUri,
+            imageUrl,
             lastSyncedAt: new Date(),
           };
         })

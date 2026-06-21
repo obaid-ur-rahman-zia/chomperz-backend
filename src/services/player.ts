@@ -1,6 +1,6 @@
 import type { IUser } from "../models/User";
 import type { ISkill } from "../models/Skill";
-import { getChomperLabel } from "../lib/chomper";
+import { getChomperLabelForUser } from "../lib/chomper";
 import { BASE_COINS_PER_DAY, calculatePendingCoins } from "../lib/formulas";
 import { getUserEconomy } from "./economy";
 import { getBalances } from "./resources";
@@ -19,15 +19,25 @@ import {
 } from "../config/nftContract";
 import { Nft } from "../models/Nft";
 import { getSkillsPayload } from "./activeSkills";
+import { resolveDisplayAvatar } from "./avatar";
+import { getAllCrownBindings } from "./collectionConfig";
 
 export async function serializePlayer(user: IUser, skill: ISkill) {
   const userId = user._id.toString();
   const economy = await getUserEconomy(user, skill);
   const { zCoins, coins } = await getBalances(userId);
   const walletAddress = await getWalletAddress(userId);
-  const tokenDocs = await Nft.find({ userId }).select("tokenId rarity").lean();
+  const tokenDocs = await Nft.find({ userId }).select("tokenId rarity imageUrl").lean();
+  const crownBindings = await getAllCrownBindings();
+  const crownTokenIds = new Set(crownBindings.map((b) => b.tokenId));
   const costs = getUpgradeCosts(skill);
-  const nfts = tokenDocs.map((n) => ({ tokenId: n.tokenId, rarity: n.rarity }));
+  const nfts = tokenDocs.map((n) => ({
+    tokenId: n.tokenId,
+    rarity: n.rarity,
+    imageUrl: n.imageUrl || "",
+    isCrownBound: crownTokenIds.has(n.tokenId),
+  }));
+  const displayAvatarUrl = resolveDisplayAvatar(user, tokenDocs);
   const activeSkills = await getSkillsPayload(userId);
   const lastCoinsClaimAt = user.lastCoinsClaimAt ?? user.lastClaimAt;
   const pendingCoins = calculatePendingCoins(lastCoinsClaimAt);
@@ -49,6 +59,9 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
     twitterHandle: user.username,
     username: user.username,
     profilePicUrl: user.profilePicUrl,
+    displayAvatarUrl,
+    avatarSource: user.avatarSource ?? "default",
+    avatarNftTokenId: user.avatarNftTokenId ?? null,
     walletAddress,
     nftCount: user.nftCount,
     multiplier: user.multiplier,
@@ -74,7 +87,7 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
     nftCollectionName,
     nftContractAddress,
     isDevNftCollection,
-    chomperLabel: getChomperLabel(economy.nfts),
+    chomperLabel: getChomperLabelForUser(user, economy.nfts),
     activeSkills,
     economy: {
       nftCount: economy.breakdown.nftCount,

@@ -312,6 +312,20 @@ export async function completeAction(userId: string) {
   };
 }
 
+export async function stopAction(userId: string) {
+  const skill = await loadSkillDocument(userId);
+
+  if (!skill.activeAction) {
+    throw new Error("No active action to stop");
+  }
+
+  skill.activeAction = null;
+  syncLegacyFieldsFromPlayerSkills(skill);
+  await skill.save();
+
+  return getSkillsPayload(userId);
+}
+
 export async function getActionStatus(userId: string) {
   const skill = await loadSkillDocument(userId);
   await ensureActionAdvanced(skill, userId);

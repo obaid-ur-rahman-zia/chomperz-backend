@@ -14,6 +14,7 @@ export interface PlotPatch {
   name: string;
   ownerWallet: string | null;
   landlordHandle: string | null;
+  landlordAvatarUrl: string | null;
   status: string;
   lastClaimAt: string | null;
   abandonedAt: string | null;
@@ -50,6 +51,7 @@ export function toPlotPatch(plot: {
   name: string;
   ownerWallet: string | null;
   landlordHandle: string | null;
+  landlordAvatarUrl?: string | null;
   status: string;
   lastClaimAt: Date | null;
   abandonedAt?: Date | null;
@@ -62,6 +64,7 @@ export function toPlotPatch(plot: {
     name: plot.name,
     ownerWallet: plot.ownerWallet,
     landlordHandle: plot.landlordHandle,
+    landlordAvatarUrl: plot.landlordAvatarUrl ?? null,
     status: plot.status,
     lastClaimAt: plot.lastClaimAt ? plot.lastClaimAt.toISOString() : null,
     abandonedAt: plot.abandonedAt ? plot.abandonedAt.toISOString() : null,

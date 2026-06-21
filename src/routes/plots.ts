@@ -7,10 +7,16 @@ import {
   purchaseLand,
   takeoverLand,
 } from "../services/land";
+import { resyncCrownPlotsForUser } from "../services/legendaryLand";
 
 const router = Router();
 
-router.get("/", async (_req: Request, res: Response) => {
+router.get("/", optionalAuth, async (req: Request, res: Response) => {
+  if (req.auth?.playerId) {
+    await resyncCrownPlotsForUser(req.auth.playerId).catch(() => {
+      /* non-fatal — still return map */
+    });
+  }
   const plots = await listLands();
   res.json({
     plots: plots.map((p) => ({
@@ -20,6 +26,7 @@ router.get("/", async (_req: Request, res: Response) => {
       name: p.name,
       ownerWallet: p.ownerWallet,
       landlordHandle: p.landlordHandle,
+      landlordAvatarUrl: p.landlordAvatarUrl ?? null,
       status: p.status,
       abandonedAt: p.abandonedAt ? new Date(p.abandonedAt).toISOString() : null,
       renters: p.renters,

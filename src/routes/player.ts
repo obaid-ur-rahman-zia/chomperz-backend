@@ -7,12 +7,13 @@ import { serializePlayer } from "../services/player";
 import { getUserEconomy } from "../services/economy";
 import { creditBalance } from "../services/resources";
 import { getWalletAddress } from "../services/wallet";
-import { syncUserNfts, validateChainConfig } from "../services/nft";
+import { syncUserNfts, validateChainConfig, ensureNftImageUrl } from "../services/nft";
 import { getRoomLayout, buyFurniture, saveLayout } from "../services/room";
 import {
   getSkillsPayload,
   selectSkill,
   startAction,
+  stopAction,
   completeAction,
   getActionStatus,
 } from "../services/activeSkills";
@@ -20,8 +21,22 @@ import { getInventory } from "../services/inventory";
 import { calculatePendingCoins } from "../lib/formulas";
 import type { ActiveSkillType } from "../models/Skill";
 import { ACTIVE_SKILL_TYPES } from "../models/Skill";
+import { Nft } from "../models/Nft";
+import { resolveDisplayAvatar } from "../services/avatar";
+import { refreshLandlordAvatarsForUser } from "../services/legendaryLand";
 
 const router = Router();
+
+function parseTokenId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
 
 async function loadUserContext(userId: string) {
   const user = await findUserById(userId);
@@ -234,12 +249,70 @@ router.post("/skills/start", requireAuth, async (req: Request, res: Response) =>
   }
 });
 
+router.post("/skills/stop", requireAuth, async (req: Request, res: Response) => {
+  try {
+    res.json(await stopAction(req.auth!.playerId));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Stop failed" });
+  }
+});
+
 router.post("/skills/complete", requireAuth, async (req: Request, res: Response) => {
   try {
     res.json(await completeAction(req.auth!.playerId));
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Complete failed" });
   }
+});
+
+router.post("/avatar", requireAuth, async (req: Request, res: Response) => {
+  const { source } = req.body as { source?: string; tokenId?: unknown };
+  if (source !== "default" && source !== "twitter" && source !== "nft") {
+    res.status(400).json({ error: "source must be default, twitter, or nft" });
+    return;
+  }
+
+  const ctx = await loadUserContext(req.auth!.playerId);
+  if (!ctx) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  const user = ctx.user;
+
+  if (source === "nft") {
+    const tokenId = parseTokenId(req.body.tokenId);
+    if (tokenId === null) {
+      res.status(400).json({ error: "tokenId is required when source is nft" });
+      return;
+    }
+    const owned = await Nft.findOne({ userId: user._id, tokenId });
+    if (!owned) {
+      res.status(400).json({ error: "You do not own that NFT" });
+      return;
+    }
+    await ensureNftImageUrl(user._id.toString(), tokenId);
+    user.avatarSource = "nft";
+    user.avatarNftTokenId = tokenId;
+  } else if (source === "twitter") {
+    user.avatarSource = "twitter";
+    user.avatarNftTokenId = null;
+  } else {
+    user.avatarSource = "default";
+    user.avatarNftTokenId = null;
+  }
+
+  await user.save();
+  await refreshLandlordAvatarsForUser(user._id.toString());
+
+  res.json({
+    success: true,
+    displayAvatarUrl: resolveDisplayAvatar(
+      user,
+      await Nft.find({ userId: user._id }).select("tokenId imageUrl").lean()
+    ),
+    player: await serializePlayer(user, ctx.skill),
+  });
 });
 
 export default router;

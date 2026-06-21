@@ -10,3 +10,18 @@ export function getChomperLabel(nfts: NftToken[]): string {
   const primary = nfts[0];
   return `Chomper #${primary.tokenId} (${formatRarity(primary.rarity)})`;
 }
+
+/** Label for dashboard/profile — respects chosen NFT avatar when set. */
+export function getChomperLabelForUser(
+  user: { avatarSource?: "default" | "twitter" | "nft"; avatarNftTokenId?: number | null },
+  ownedNfts: NftToken[]
+): string {
+  if (user.avatarSource === "nft" && user.avatarNftTokenId != null) {
+    const match = ownedNfts.find((n) => n.tokenId === user.avatarNftTokenId);
+    if (match) {
+      return `Chomper #${match.tokenId} (${formatRarity(match.rarity)})`;
+    }
+    return `Chomper #${user.avatarNftTokenId}`;
+  }
+  return getChomperLabel(ownedNfts);
+}

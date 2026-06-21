@@ -5,6 +5,9 @@ import { debitBalance, creditBalance } from "./resources";
 import { getWalletAddress } from "./wallet";
 import { MS_PER_DAY } from "../lib/constants";
 import { emitPlotPatch, emitTerritoryEvent, toPlotPatch } from "../socket/territory";
+import { resolveDisplayAvatar } from "./avatar";
+import { Nft } from "../models/Nft";
+import { getCrownTokenForPlot } from "./collectionConfig";
 
 const MAX_RENTERS = 3;
 const MIN_SEVEN_DAY_BID = 7;
@@ -98,12 +101,25 @@ function minOutbidAmount(sorted: ILand["renters"]): number {
 export async function listLands() {
   await enforceLandInactivity();
   await expireStaleLeases();
-  return Land.find()
+  const plots = await Land.find()
     .select(
-      "plotId type legendaryTokenId name ownerWallet landlordHandle status renters abandonedAt"
+      "plotId type legendaryTokenId name ownerWallet landlordHandle landlordAvatarUrl status renters abandonedAt"
     )
     .sort({ plotId: 1 })
     .lean();
+
+  const enriched = await Promise.all(
+    plots.map(async (p) => {
+      if (p.type !== "legendary") return p;
+      const configured = await getCrownTokenForPlot(p.plotId);
+      return {
+        ...p,
+        legendaryTokenId: p.legendaryTokenId ?? configured,
+      };
+    })
+  );
+
+  return enriched;
 }
 
 export async function getLandDetail(plotId: number, viewerUserId?: string) {
@@ -124,8 +140,15 @@ export async function getLandDetail(plotId: number, viewerUserId?: string) {
     loginRemainingMs = loginRemainingMsFromDate(owner?.lastLoginAt ?? null);
   }
 
+  let legendaryTokenId = plot.legendaryTokenId;
+  if (plot.type === "legendary") {
+    const configured = await getCrownTokenForPlot(plotId);
+    if (configured != null) legendaryTokenId = configured;
+  }
+
   return {
     ...plot,
+    legendaryTokenId,
     isLegendary: plot.type === "legendary",
     renters,
     landType: plot.type === "legendary" ? "Legendary (Crown Land)" : "Frontier",
@@ -169,7 +192,8 @@ export async function purchaseLand(userId: string, plotId: number) {
   plot.ownerId = user._id;
   plot.ownerWallet = wallet.toLowerCase();
   plot.landlordHandle = user.username;
-  plot.landlordAvatarUrl = user.profilePicUrl;
+  const nfts = await Nft.find({ userId: user._id }).select("tokenId imageUrl").lean();
+  plot.landlordAvatarUrl = resolveDisplayAvatar(user, nfts);
   plot.purchasePrice = LAND_PURCHASE_PRICE;
   plot.status = "owned";
   plot.abandonedAt = null;
@@ -214,7 +238,8 @@ export async function takeoverLand(userId: string, plotId: number) {
   plot.ownerId = user._id;
   plot.ownerWallet = wallet.toLowerCase();
   plot.landlordHandle = user.username;
-  plot.landlordAvatarUrl = user.profilePicUrl;
+  const nfts = await Nft.find({ userId: user._id }).select("tokenId imageUrl").lean();
+  plot.landlordAvatarUrl = resolveDisplayAvatar(user, nfts);
   plot.status = "owned";
   plot.abandonedAt = null;
   plot.renters = [];

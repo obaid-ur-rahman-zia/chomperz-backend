@@ -4,8 +4,8 @@ import { getNftContractAddress } from "../config/nftContract";
 import {
   syncLegendaryPlotOwner,
   clearLegendaryPlotOwner,
-  legendaryTokenToPlotId,
 } from "../services/legendaryLand";
+import { getPlotForToken, isConfiguredCrownToken } from "../services/collectionConfig";
 
 const router = Router();
 
@@ -71,7 +71,11 @@ router.post("/nft-transfer", async (req: Request, res: Response) => {
     if (contractAddress && activityContract && activityContract !== contractAddress) continue;
 
     const tokenId = parseTokenId(activity.erc721TokenId);
-    if (tokenId === null || tokenId < 1 || tokenId > 10) continue;
+    if (tokenId === null) continue;
+    if (!(await isConfiguredCrownToken(tokenId))) continue;
+
+    const plotId = await getPlotForToken(tokenId);
+    if (plotId === null) continue;
 
     const to = activity.toAddress;
     const from = activity.fromAddress;
@@ -80,10 +84,10 @@ router.post("/nft-transfer", async (req: Request, res: Response) => {
     try {
       if (to && to.toLowerCase() !== zero) {
         await syncLegendaryPlotOwner(tokenId, to);
-        results.push({ tokenId, plotId: legendaryTokenToPlotId(tokenId), action: "transfer_in" });
+        results.push({ tokenId, plotId, action: "transfer_in" });
       } else if (from && from.toLowerCase() !== zero) {
         await clearLegendaryPlotOwner(tokenId);
-        results.push({ tokenId, plotId: legendaryTokenToPlotId(tokenId), action: "burn_or_out" });
+        results.push({ tokenId, plotId, action: "burn_or_out" });
       }
     } catch (err) {
       console.error("Legendary sync error:", err);
