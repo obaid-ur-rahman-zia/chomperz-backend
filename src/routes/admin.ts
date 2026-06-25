@@ -16,6 +16,7 @@ import {
   grantSkillsToUser,
 } from "../services/adminGrant";
 import { reconcileAllCrownPlotOwnership } from "../services/legendaryLand";
+import { Skill, syncLegacyFieldsFromPlayerSkills } from "../models/Skill";
 
 const router = Router();
 
@@ -254,6 +255,30 @@ router.post("/collection-config/rarity/remove", async (req: Request, res: Respon
     res.json({ success: true, config });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Failed to remove rarity" });
+  }
+});
+
+router.post("/repair/clear-active-action", async (req: Request, res: Response) => {
+  if (!verifyAdminSecret(req, res)) return;
+  const { handle } = req.body as { handle?: string };
+  if (!handle?.trim()) {
+    res.status(400).json({ error: "handle is required (e.g. @malikobaid0056)" });
+    return;
+  }
+  try {
+    const { user, username } = await findUserByHandle(handle);
+    const skill = await Skill.findOne({ userId: user._id });
+    if (!skill?.activeAction) {
+      res.json({ success: true, handle: username, cleared: false, message: "No active skill action" });
+      return;
+    }
+    const previous = skill.activeAction;
+    skill.activeAction = null;
+    syncLegacyFieldsFromPlayerSkills(skill);
+    await skill.save();
+    res.json({ success: true, handle: username, cleared: true, previous });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Repair failed" });
   }
 });
 

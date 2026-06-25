@@ -82,8 +82,11 @@ async function runSingleCycle(
   return true;
 }
 
+/** Max cycles simulated per request — prevents /player/me hanging after long idle sessions. */
+const MAX_CATCHUP_CYCLES = 50;
+
 /**
- * Process all completed cycles since startedAt, then keep the action running
+ * Process completed cycles since startedAt, then keep the action running
  * (continuous loop) until craft materials run out.
  */
 async function ensureActionAdvanced(skill: ISkill, userId: string): Promise<number> {
@@ -92,12 +95,34 @@ async function ensureActionAdvanced(skill: ISkill, userId: string): Promise<numb
 
   const skillType = action.skill;
   const durationMs = action.durationMs;
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    skill.activeAction = null;
+    syncLegacyFieldsFromPlayerSkills(skill);
+    await skill.save();
+    return 0;
+  }
+
   let startMs = new Date(action.startedAt).getTime();
   const now = Date.now();
   let elapsed = now - startMs;
   let cyclesProcessed = 0;
 
-  while (elapsed >= durationMs) {
+  const backlogCycles = Math.floor(elapsed / durationMs);
+  if (backlogCycles > MAX_CATCHUP_CYCLES) {
+    // Long offline session — skip simulating every missed cycle (prevents /me timeouts).
+    const remainder = elapsed % durationMs;
+    startMs = now - remainder;
+    skill.activeAction = {
+      skill: skillType,
+      startedAt: new Date(startMs),
+      durationMs,
+    };
+    syncLegacyFieldsFromPlayerSkills(skill);
+    await skill.save();
+    return 0;
+  }
+
+  while (elapsed >= durationMs && cyclesProcessed < MAX_CATCHUP_CYCLES) {
     const ran = await runSingleCycle(skill, userId, skillType);
     if (!ran) {
       skill.activeAction = null;
@@ -109,6 +134,12 @@ async function ensureActionAdvanced(skill: ISkill, userId: string): Promise<numb
     cyclesProcessed += 1;
     startMs += durationMs;
     elapsed = now - startMs;
+  }
+
+  if (elapsed >= durationMs) {
+    // Skip simulating a huge offline backlog — snap to the current cycle tick.
+    const remainder = elapsed % durationMs;
+    startMs = now - remainder;
   }
 
   skill.activeAction = {
@@ -221,20 +252,40 @@ async function loadSkillDocument(userId: string): Promise<ISkill> {
   return skill;
 }
 
-export async function getSkillsPayload(userId: string) {
-  const skill = await loadSkillDocument(userId);
+export async function getSkillsPayload(
+  userId: string,
+  options?: { catchUp?: boolean; skill?: ISkill }
+) {
+  const skill =
+    options?.skill ??
+    (await Skill.findOne({ userId }));
+  if (!skill) throw new Error("Skill not found");
+
+  if (!options?.skill) {
+    await applyPendingStatUpgrades(skill);
+    ensurePlayerSkills(skill);
+  }
+
+  if (options?.catchUp === false) {
+    return buildSkillsPayload(skill, userId);
+  }
+
   await ensureActionAdvanced(skill, userId);
 
   const refreshed = await Skill.findOne({ userId });
   if (!refreshed) throw new Error("Skill not found");
 
-  const selected = refreshed.selectedSkill ?? "woodcutting";
+  return buildSkillsPayload(refreshed, userId);
+}
+
+async function buildSkillsPayload(skill: ISkill, userId: string) {
+  const selected = skill.selectedSkill ?? "woodcutting";
   const config = ACTIVE_SKILL_CONFIG[selected];
   const inventoryQty = await getItemQuantity(userId, config.rewardItemId);
   const inputId = inputItemId(selected);
   const inputQty = inputId ? await getItemQuantity(userId, inputId) : 0;
 
-  return serializeSkillsState(refreshed, inventoryQty, inputQty);
+  return serializeSkillsState(skill, inventoryQty, inputQty);
 }
 
 export async function selectSkill(userId: string, skillType: ActiveSkillType) {

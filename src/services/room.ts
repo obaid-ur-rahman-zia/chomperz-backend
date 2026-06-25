@@ -4,6 +4,52 @@ import { debitBalance, getBalance } from "./resources";
 import { getItemQuantity, removeItem } from "./inventory";
 import { getBalances } from "./resources";
 
+const FLOOR_ITEM_IDS = new Set(["wood_floor", "iron_floor", "fancy_floor"]);
+
+function isFloorItem(itemId: string): boolean {
+  return FLOOR_ITEM_IDS.has(itemId);
+}
+
+type LayoutEntryInput = {
+  itemId: string;
+  x: number;
+  y: number;
+  instanceId?: string;
+  rotated?: boolean;
+  rotation?: number;
+};
+
+function normalizeRotation(value?: number | boolean | null): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return ((Math.round(value) % 4) + 4) % 4;
+  }
+  if (value === true) return 1;
+  return 0;
+}
+
+function normalizeLayoutEntry(entry: LayoutEntryInput, index: number) {
+  const rotation = normalizeRotation(
+    entry.rotation ?? (entry.rotated ? 1 : 0)
+  );
+  return {
+    itemId: entry.itemId,
+    x: entry.x,
+    y: entry.y,
+    instanceId: entry.instanceId ?? `${entry.itemId}-${entry.x}-${entry.y}-${index}`,
+    rotation,
+    rotated: rotation === 1 || rotation === 3,
+  };
+}
+
+function splitLayoutAndFloor(layout: LayoutEntryInput[], storedFloorId: string | null) {
+  const floorEntry = layout.find((e) => isFloorItem(e.itemId));
+  const furniture = layout
+    .filter((e) => !isFloorItem(e.itemId))
+    .map((e, i) => normalizeLayoutEntry(e, i));
+  const floorId = storedFloorId ?? floorEntry?.itemId ?? null;
+  return { furniture, floorId };
+}
+
 export async function getRoomLayout(userId: string) {
   let room = await RoomLayout.findOne({ userId });
   if (!room) {
@@ -15,10 +61,13 @@ export async function getRoomLayout(userId: string) {
     inventory[key] = await getItemQuantity(userId, key);
   }
 
+  const { furniture, floorId } = splitLayoutAndFloor(room.layout, room.floorId ?? null);
+
   return {
     catalog: FURNITURE_CATALOG,
     ownedFurniture: room.ownedFurniture,
-    layout: room.layout,
+    layout: furniture,
+    floorId,
     zCoins,
     coins,
     inventory,
@@ -86,18 +135,33 @@ export async function buyFurniture(userId: string, itemId: string) {
 
 export async function saveLayout(
   userId: string,
-  layout: { itemId: string; x: number; y: number }[]
+  layout: LayoutEntryInput[],
+  floorId?: string | null
 ) {
   const room = await RoomLayout.findOne({ userId });
   if (!room) throw new Error("Room not found");
 
-  for (const entry of layout) {
+  const furniture = layout
+    .filter((e) => !isFloorItem(e.itemId))
+    .map((e, i) => normalizeLayoutEntry(e, i));
+
+  for (const entry of furniture) {
     if (!room.ownedFurniture.includes(entry.itemId)) {
       throw new Error(`You do not own ${entry.itemId}`);
     }
   }
 
-  room.layout = layout;
+  if (floorId != null) {
+    if (!isFloorItem(floorId)) {
+      throw new Error("Invalid floor item");
+    }
+    if (!room.ownedFurniture.includes(floorId)) {
+      throw new Error(`You do not own ${floorId}`);
+    }
+    room.floorId = floorId;
+  }
+
+  room.layout = furniture;
   await room.save();
-  return room.layout;
+  return { layout: room.layout, floorId: room.floorId };
 }

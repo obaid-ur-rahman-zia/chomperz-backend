@@ -48,12 +48,18 @@ async function loadUserContext(userId: string) {
 }
 
 router.get("/me", requireAuth, async (req: Request, res: Response) => {
-  const ctx = await loadUserContext(req.auth!.playerId);
-  if (!ctx) {
-    res.status(404).json({ error: "User not found" });
-    return;
+  try {
+    const ctx = await loadUserContext(req.auth!.playerId);
+    if (!ctx) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    res.json(await serializePlayer(ctx.user, ctx.skill, { catchUpActions: false }));
+  } catch (err) {
+    console.error("GET /player/me error:", err);
+    const msg = err instanceof Error ? err.message : "Failed to load player";
+    res.status(500).json({ error: msg });
   }
-  res.json(await serializePlayer(ctx.user, ctx.skill));
 });
 
 router.post("/claim", requireAuth, async (req: Request, res: Response) => {
@@ -192,16 +198,17 @@ router.post("/crib/buy", requireAuth, async (req: Request, res: Response) => {
 });
 
 router.post("/crib/layout", requireAuth, async (req: Request, res: Response) => {
-  const { layout } = req.body as {
+  const { layout, floorId } = req.body as {
     layout?: { itemId: string; x: number; y: number }[];
+    floorId?: string | null;
   };
   if (!Array.isArray(layout)) {
     res.status(400).json({ error: "layout array required" });
     return;
   }
   try {
-    const saved = await saveLayout(req.auth!.playerId, layout);
-    res.json({ success: true, layout: saved });
+    const saved = await saveLayout(req.auth!.playerId, layout, floorId);
+    res.json({ success: true, ...saved });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Save failed" });
   }

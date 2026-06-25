@@ -1,4 +1,4 @@
-import { Skill, type ISkill, ensurePlayerSkills, syncLegacyFieldsFromPlayerSkills } from "../models/Skill";
+import { Skill, type ISkill, ACTIVE_SKILL_TYPES, ensurePlayerSkills, syncLegacyFieldsFromPlayerSkills } from "../models/Skill";
 import { getUpgradeCost } from "../lib/economy";
 import { getUpgradeTimerMs } from "../lib/formulas";
 import { debitBalance } from "./resources";
@@ -15,9 +15,12 @@ export async function ensureSkill(userId: string): Promise<ISkill> {
   if (!skill.selectedSkill) {
     skill.selectedSkill = "woodcutting";
   }
+  const hadPlayerSkills = skill.playerSkills?.length === ACTIVE_SKILL_TYPES.length;
   ensurePlayerSkills(skill);
   syncLegacyFieldsFromPlayerSkills(skill);
-  await skill.save();
+  if (!hadPlayerSkills || skill.isModified()) {
+    await skill.save();
+  }
   return skill;
 }
 

@@ -17,17 +17,32 @@ import {
   getNftContractAddress,
   isUsingDevNftContract,
 } from "../config/nftContract";
-import { Nft } from "../models/Nft";
 import { getSkillsPayload } from "./activeSkills";
 import { resolveDisplayAvatar } from "./avatar";
 import { getAllCrownBindings } from "./collectionConfig";
 
-export async function serializePlayer(user: IUser, skill: ISkill) {
+export interface SerializePlayerOptions {
+  /** Skip simulating offline skill cycles — use for fast login (/me). */
+  catchUpActions?: boolean;
+}
+
+export async function serializePlayer(
+  user: IUser,
+  skill: ISkill,
+  options?: SerializePlayerOptions
+) {
   const userId = user._id.toString();
-  const economy = await getUserEconomy(user, skill);
-  const { zCoins, coins } = await getBalances(userId);
-  const walletAddress = await getWalletAddress(userId);
-  const tokenDocs = await Nft.find({ userId }).select("tokenId rarity imageUrl").lean();
+  const catchUpActions = options?.catchUpActions ?? true;
+
+  const [economy, balances, walletAddress, activeSkills] = await Promise.all([
+    getUserEconomy(user, skill),
+    getBalances(userId),
+    getWalletAddress(userId),
+    getSkillsPayload(userId, { catchUp: catchUpActions, skill }),
+  ]);
+
+  const { zCoins, coins } = balances;
+  const tokenDocs = economy.nfts;
   const crownBindings = await getAllCrownBindings();
   const crownTokenIds = new Set(crownBindings.map((b) => b.tokenId));
   const costs = getUpgradeCosts(skill);
@@ -38,7 +53,6 @@ export async function serializePlayer(user: IUser, skill: ISkill) {
     isCrownBound: crownTokenIds.has(n.tokenId),
   }));
   const displayAvatarUrl = resolveDisplayAvatar(user, tokenDocs);
-  const activeSkills = await getSkillsPayload(userId);
   const lastCoinsClaimAt = user.lastCoinsClaimAt ?? user.lastClaimAt;
   const pendingCoins = calculatePendingCoins(lastCoinsClaimAt);
 
