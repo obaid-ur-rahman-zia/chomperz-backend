@@ -183,6 +183,7 @@ export async function getLandDetail(plotId: number, viewerUserId?: string) {
     loginRemainingMs,
     landlordTaxPct: 10,
     viewerOwnsFrontierLand,
+    viewerHasWallet,
     viewerCanPurchase: frontierUnclaimed && viewerHasWallet && viewerNftCount > 0,
     viewerCanTakeover:
       isFrontier(plot) && plot.status === "abandoned" && viewerHasWallet && viewerNftCount > 0,

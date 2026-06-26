@@ -86,4 +86,22 @@ export async function findUserByHandle(handle: string) {
   return { user, username };
 }
 
+export async function searchUsersByHandlePrefix(query: string, limit = 8) {
+  const stem = query.trim().replace(/^@+/, "");
+  if (!stem) return [];
+
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const users = await User.find({
+    username: { $regex: new RegExp(`^@${escaped}`, "i") },
+  })
+    .limit(limit)
+    .select("username profilePicUrl avatarSource avatarNftTokenId")
+    .lean();
+
+  return users.map((u) => ({
+    userId: u._id.toString(),
+    username: u.username,
+  }));
+}
+
 export { getBalances };
