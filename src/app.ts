@@ -8,6 +8,7 @@ import plotsRoutes from "./routes/plots";
 import leaderboardRoutes from "./routes/leaderboard";
 import webhookRoutes from "./routes/webhooks";
 import adminRoutes from "./routes/admin";
+import playersRoutes from "./routes/players";
 
 export function createApp(ensureDb: () => Promise<void>): express.Application {
   const app = express();
@@ -61,6 +62,7 @@ export function createApp(ensureDb: () => Promise<void>): express.Application {
   app.use("/api/leaderboard", leaderboardRoutes);
   app.use("/api/webhooks", webhookRoutes);
   app.use("/api/admin", adminRoutes);
+  app.use("/api/players", playersRoutes);
 
   return app;
 }

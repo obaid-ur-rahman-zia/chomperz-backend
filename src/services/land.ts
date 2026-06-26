@@ -98,6 +98,15 @@ function minOutbidAmount(sorted: ILand["renters"]): number {
   return Math.ceil(bid * 1.1);
 }
 
+async function userOwnsFrontierLand(userId: string): Promise<boolean> {
+  const plot = await Land.findOne({
+    ownerId: new Types.ObjectId(userId),
+    type: "frontier",
+    status: "owned",
+  }).lean();
+  return plot != null;
+}
+
 export async function listLands() {
   await enforceLandInactivity();
   await expireStaleLeases();
@@ -146,6 +155,21 @@ export async function getLandDetail(plotId: number, viewerUserId?: string) {
     if (configured != null) legendaryTokenId = configured;
   }
 
+  let viewerOwnsFrontierLand = false;
+  let viewerHasWallet = false;
+  let viewerNftCount = 0;
+  if (viewerUserId) {
+    viewerOwnsFrontierLand = await userOwnsFrontierLand(viewerUserId);
+    viewerHasWallet = Boolean(await getWalletAddress(viewerUserId));
+    const viewer = await User.findById(viewerUserId).select("nftCount").lean();
+    viewerNftCount = viewer?.nftCount ?? 0;
+  }
+
+  const frontierUnclaimed =
+    isFrontier(plot) && plot.status === "unclaimed" && plotId >= 10 && plotId <= 99;
+  const frontierOwned =
+    isFrontier(plot) && plot.status === "owned" && !!plot.ownerId;
+
   return {
     ...plot,
     legendaryTokenId,
@@ -154,13 +178,19 @@ export async function getLandDetail(plotId: number, viewerUserId?: string) {
     landType: plot.type === "legendary" ? "Legendary (Crown Land)" : "Frontier",
     displayId: String(plotId + 1).padStart(2, "0"),
     minBid,
-    purchasePrice:
-      isFrontier(plot) && plot.status === "unclaimed" && plotId >= 10 && plotId <= 99
-        ? LAND_PURCHASE_PRICE
-        : null,
+    purchasePrice: frontierUnclaimed ? LAND_PURCHASE_PRICE : null,
     canTakeover: isFrontier(plot) && plot.status === "abandoned",
     loginRemainingMs,
     landlordTaxPct: 10,
+    viewerOwnsFrontierLand,
+    viewerCanPurchase: frontierUnclaimed && viewerHasWallet && viewerNftCount > 0,
+    viewerCanTakeover:
+      isFrontier(plot) && plot.status === "abandoned" && viewerHasWallet && viewerNftCount > 0,
+    viewerCanBid:
+      frontierOwned &&
+      viewerHasWallet &&
+      !viewerOwnsFrontierLand &&
+      plot.ownerId!.toString() !== viewerUserId,
   };
 }
 
@@ -178,6 +208,9 @@ export async function purchaseLand(userId: string, plotId: number) {
 
   const user = await User.findById(userId);
   if (!user) throw new Error("User not found");
+  if ((user.nftCount ?? 0) <= 0) {
+    throw new Error("NFT required to purchase land");
+  }
 
   const plot = await Land.findOne({ plotId });
   if (!plot) throw new Error("Plot not found");
@@ -222,6 +255,9 @@ export async function takeoverLand(userId: string, plotId: number) {
 
   const user = await User.findById(userId);
   if (!user) throw new Error("User not found");
+  if ((user.nftCount ?? 0) <= 0) {
+    throw new Error("NFT required to purchase land");
+  }
 
   const plot = await Land.findOne({ plotId });
   if (!plot) throw new Error("Plot not found");
@@ -308,6 +344,12 @@ export async function placeBid(userId: string, plotId: number, sevenDayBid: numb
   if (!plot) throw new Error("Plot not found");
   if (plot.status !== "owned" || !plot.ownerId) {
     throw new Error("Cannot bid on unowned land");
+  }
+  if (plot.ownerId.toString() === userId) {
+    throw new Error("Cannot bid on your own land");
+  }
+  if (await userOwnsFrontierLand(userId)) {
+    throw new Error("Land owners cannot rent on other plots");
   }
 
   await processRentPayoutsForOwner(plot.ownerId.toString());

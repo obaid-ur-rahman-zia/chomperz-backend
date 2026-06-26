@@ -72,4 +72,18 @@ export function userIdString(user: IUser | { _id: Types.ObjectId }): string {
   return user._id.toString();
 }
 
+export function normalizeHandle(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+}
+
+export async function findUserByHandle(handle: string) {
+  const username = normalizeHandle(handle);
+  const user = await User.findOne({ username });
+  if (!user) {
+    throw new Error(`User ${username} not found`);
+  }
+  return { user, username };
+}
+
 export { getBalances };

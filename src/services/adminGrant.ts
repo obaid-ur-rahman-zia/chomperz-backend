@@ -2,6 +2,7 @@ import { User } from "../models/User";
 import { ITEM_CATALOG, ITEM_IDS } from "../data/items";
 import { addItem } from "./inventory";
 import { ensureSkill } from "./skills";
+import { findUserByHandle, normalizeHandle } from "./user";
 import {
   ACTIVE_SKILL_TYPES,
   type ActiveSkillType,
@@ -11,19 +12,7 @@ import {
 } from "../models/Skill";
 import { ACTIVE_SKILL_CONFIG } from "../data/activeSkills";
 
-export function normalizeHandle(raw: string): string {
-  const trimmed = raw.trim();
-  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
-}
-
-export async function findUserByHandle(handle: string) {
-  const username = normalizeHandle(handle);
-  const user = await User.findOne({ username });
-  if (!user) {
-    throw new Error(`User ${username} not found`);
-  }
-  return { user, username };
-}
+export { findUserByHandle, normalizeHandle };
 
 export async function grantItemsToUser(
   userId: string,

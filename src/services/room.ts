@@ -1,4 +1,5 @@
 import { RoomLayout } from "../models/RoomLayout";
+import { User } from "../models/User";
 import { FURNITURE_CATALOG, type FurnitureItem } from "../data/furniture";
 import { debitBalance, getBalance } from "./resources";
 import { getItemQuantity, removeItem } from "./inventory";
@@ -164,4 +165,24 @@ export async function saveLayout(
   room.layout = furniture;
   await room.save();
   return { layout: room.layout, floorId: room.floorId };
+}
+
+/** Public read-only crib for viewing another player's room. */
+export async function getPublicRoomLayout(userId: string) {
+  const user = await User.findById(userId).select("username").lean();
+  if (!user) throw new Error("User not found");
+
+  let room = await RoomLayout.findOne({ userId });
+  if (!room) {
+    room = await RoomLayout.create({ userId });
+  }
+
+  const { furniture, floorId } = splitLayoutAndFloor(room.layout, room.floorId ?? null);
+
+  return {
+    username: user.username,
+    catalog: FURNITURE_CATALOG,
+    layout: furniture,
+    floorId,
+  };
 }
