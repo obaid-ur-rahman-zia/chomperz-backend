@@ -101,7 +101,6 @@ function minOutbidAmount(sorted: ILand["renters"]): number {
 async function userOwnsFrontierLand(userId: string): Promise<boolean> {
   const plot = await Land.findOne({
     ownerId: new Types.ObjectId(userId),
-    type: "frontier",
     status: "owned",
   }).lean();
   return plot != null;
@@ -184,9 +183,14 @@ export async function getLandDetail(plotId: number, viewerUserId?: string) {
     landlordTaxPct: 10,
     viewerOwnsFrontierLand,
     viewerHasWallet,
-    viewerCanPurchase: frontierUnclaimed && viewerHasWallet && viewerNftCount > 0,
+    viewerCanPurchase:
+      frontierUnclaimed && viewerHasWallet && viewerNftCount > 0 && !viewerOwnsFrontierLand,
     viewerCanTakeover:
-      isFrontier(plot) && plot.status === "abandoned" && viewerHasWallet && viewerNftCount > 0,
+      isFrontier(plot) &&
+      plot.status === "abandoned" &&
+      viewerHasWallet &&
+      viewerNftCount > 0 &&
+      !viewerOwnsFrontierLand,
     viewerCanBid:
       frontierOwned &&
       viewerHasWallet &&
@@ -211,6 +215,9 @@ export async function purchaseLand(userId: string, plotId: number) {
   if (!user) throw new Error("User not found");
   if ((user.nftCount ?? 0) <= 0) {
     throw new Error("NFT required to purchase land");
+  }
+  if (await userOwnsFrontierLand(userId)) {
+    throw new Error("Each player can only own one land");
   }
 
   const plot = await Land.findOne({ plotId });
@@ -258,6 +265,9 @@ export async function takeoverLand(userId: string, plotId: number) {
   if (!user) throw new Error("User not found");
   if ((user.nftCount ?? 0) <= 0) {
     throw new Error("NFT required to purchase land");
+  }
+  if (await userOwnsFrontierLand(userId)) {
+    throw new Error("Each player can only own one land");
   }
 
   const plot = await Land.findOne({ plotId });

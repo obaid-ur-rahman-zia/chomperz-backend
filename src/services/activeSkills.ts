@@ -20,9 +20,11 @@ import {
   CRAFT_XP,
   inputItemId,
   inputQuantity,
+  skillUpgradeCost,
 } from "../lib/formulas";
 import { addItem, removeItem, getItemQuantity } from "./inventory";
 import { applyPendingStatUpgrades } from "./skills";
+import { debitBalance } from "./resources";
 
 export interface ActionStatus {
   state: "idle" | "running" | "completed";
@@ -85,6 +87,48 @@ async function runSingleCycle(
 /** Max cycles simulated per request — prevents /player/me hanging after long idle sessions. */
 const MAX_CATCHUP_CYCLES = 50;
 
+function successfulGatherCount(cycles: number, successPct: number): number {
+  const expected = cycles * (successPct / 100);
+  const guaranteed = Math.floor(expected);
+  const fractional = expected - guaranteed;
+  return guaranteed + (Math.random() < fractional ? 1 : 0);
+}
+
+async function runBatchCycles(
+  skill: ISkill,
+  userId: string,
+  skillType: ActiveSkillType,
+  cycles: number
+): Promise<number> {
+  if (cycles <= 0) return 0;
+
+  const matId = inputItemId(skillType);
+  const matQty = inputQuantity(skillType);
+  const isCraft = skillType === "carpentry" || skillType === "smithing";
+  let runnableCycles = cycles;
+
+  if (matId && matQty > 0) {
+    const have = await getItemQuantity(userId, matId);
+    runnableCycles = Math.min(runnableCycles, Math.floor(have / matQty));
+    if (runnableCycles <= 0) return 0;
+    await removeItem(userId, matId, runnableCycles * matQty);
+  }
+
+  const config = ACTIVE_SKILL_CONFIG[skillType];
+  const level = getSkillLevel(skill, skillType);
+  const rewardCount = isCraft
+    ? runnableCycles
+    : successfulGatherCount(runnableCycles, skillSuccessPct(skillType, level));
+
+  if (rewardCount > 0) {
+    await addItem(userId, config.rewardItemId, rewardCount);
+    addSkillXp(skill, skillType, rewardCount * (isCraft ? CRAFT_XP : GATHER_XP));
+    levelUpIfReady(skill, skillType);
+  }
+
+  return runnableCycles;
+}
+
 /**
  * Process completed cycles since startedAt, then keep the action running
  * (continuous loop) until craft materials run out.
@@ -109,17 +153,20 @@ async function ensureActionAdvanced(skill: ISkill, userId: string): Promise<numb
 
   const backlogCycles = Math.floor(elapsed / durationMs);
   if (backlogCycles > MAX_CATCHUP_CYCLES) {
-    // Long offline session — skip simulating every missed cycle (prevents /me timeouts).
+    const processed = await runBatchCycles(skill, userId, skillType, backlogCycles);
+    const canContinue = processed === backlogCycles;
     const remainder = elapsed % durationMs;
     startMs = now - remainder;
-    skill.activeAction = {
-      skill: skillType,
-      startedAt: new Date(startMs),
-      durationMs,
-    };
+    skill.activeAction = canContinue
+      ? {
+          skill: skillType,
+          startedAt: new Date(startMs),
+          durationMs: actionDurationMs(skillType, getSkillLevel(skill, skillType)),
+        }
+      : null;
     syncLegacyFieldsFromPlayerSkills(skill);
     await skill.save();
-    return 0;
+    return processed;
   }
 
   while (elapsed >= durationMs && cyclesProcessed < MAX_CATCHUP_CYCLES) {
@@ -145,7 +192,7 @@ async function ensureActionAdvanced(skill: ISkill, userId: string): Promise<numb
   skill.activeAction = {
     skill: skillType,
     startedAt: new Date(startMs),
-    durationMs,
+    durationMs: actionDurationMs(skillType, getSkillLevel(skill, skillType)),
   };
   syncLegacyFieldsFromPlayerSkills(skill);
   await skill.save();
@@ -186,7 +233,7 @@ function serializePlayerSkills(skill: ISkill) {
     level: entry.level,
     xp: entry.xp,
     active: entry.active,
-    actionDurationMs: actionDurationMs(entry.skillName),
+    actionDurationMs: actionDurationMs(entry.skillName, entry.level),
     successPct:
       entry.skillName === "carpentry" || entry.skillName === "smithing"
         ? 100
@@ -201,7 +248,7 @@ export function serializeSkillsState(skill: ISkill, inventoryQty = 0, inputQty =
   const level = getSkillLevel(skill, selected);
   const xp = getSkillXp(skill, selected);
   const successPct = skillSuccessPct(selected, level);
-  const durationMs = actionDurationMs(selected);
+  const durationMs = actionDurationMs(selected, level);
 
   return {
     selectedSkill: selected,
@@ -223,7 +270,8 @@ export function serializeSkillsState(skill: ISkill, inventoryQty = 0, inputQty =
         failPct: Math.round((100 - pct) * 10) / 10,
         inputItemId: inputItemId(id),
         inputQuantity: inputQuantity(id),
-        actionDurationMs: actionDurationMs(id),
+        actionDurationMs: actionDurationMs(id, lvl),
+        upgradeCost: skillUpgradeCost(lvl),
       };
     }),
     selected: {
@@ -291,15 +339,6 @@ async function buildSkillsPayload(skill: ISkill, userId: string) {
 export async function selectSkill(userId: string, skillType: ActiveSkillType) {
   const skill = await loadSkillDocument(userId);
 
-  if (skill.activeAction) {
-    await ensureActionAdvanced(skill, userId);
-    const updated = await Skill.findOne({ userId });
-    if (updated?.activeAction) {
-      updated.activeAction = null;
-      await updated.save();
-    }
-  }
-
   const fresh = await Skill.findOne({ userId });
   if (!fresh) throw new Error("Skill not found");
 
@@ -331,7 +370,7 @@ export async function startAction(userId: string) {
     }
   }
 
-  const durationMs = actionDurationMs(selected);
+  const durationMs = actionDurationMs(selected, getSkillLevel(skill, selected));
 
   skill.activeAction = {
     skill: selected,
@@ -375,6 +414,42 @@ export async function stopAction(userId: string) {
   await skill.save();
 
   return getSkillsPayload(userId);
+}
+
+export async function upgradePlayerSkill(userId: string, skillType: ActiveSkillType) {
+  const skill = await loadSkillDocument(userId);
+  await ensureActionAdvanced(skill, userId);
+
+  const fresh = await Skill.findOne({ userId });
+  if (!fresh) throw new Error("Skill not found");
+  ensurePlayerSkills(fresh);
+
+  const level = getSkillLevel(fresh, skillType);
+  if (level >= 100) {
+    throw new Error("Max level reached");
+  }
+
+  const cost = skillUpgradeCost(level);
+  const coins = await debitBalance(userId, "coins", cost, "skill_upgrade", {
+    skill: skillType,
+    fromLevel: level,
+    toLevel: level + 1,
+  });
+
+  setSkillLevel(fresh, skillType, level + 1);
+  getPlayerSkillEntry(fresh, skillType).xp = 0;
+
+  if (fresh.activeAction?.skill === skillType) {
+    fresh.activeAction.durationMs = actionDurationMs(skillType, level + 1);
+  }
+
+  syncLegacyFieldsFromPlayerSkills(fresh);
+  await fresh.save();
+
+  return {
+    coins,
+    payload: await getSkillsPayload(userId, { skill: fresh, catchUp: false }),
+  };
 }
 
 export async function getActionStatus(userId: string) {

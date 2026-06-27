@@ -16,6 +16,7 @@ import {
   stopAction,
   completeAction,
   getActionStatus,
+  upgradePlayerSkill,
 } from "../services/activeSkills";
 import { getInventory } from "../services/inventory";
 import { calculatePendingCoins } from "../lib/formulas";
@@ -54,7 +55,7 @@ router.get("/me", requireAuth, async (req: Request, res: Response) => {
       res.status(404).json({ error: "User not found" });
       return;
     }
-    res.json(await serializePlayer(ctx.user, ctx.skill, { catchUpActions: false }));
+    res.json(await serializePlayer(ctx.user, ctx.skill, { catchUpActions: true }));
   } catch (err) {
     console.error("GET /player/me error:", err);
     const msg = err instanceof Error ? err.message : "Failed to load player";
@@ -253,6 +254,20 @@ router.post("/skills/start", requireAuth, async (req: Request, res: Response) =>
     res.json(await startAction(req.auth!.playerId));
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Start failed" });
+  }
+});
+
+router.post("/skills/upgrade", requireAuth, async (req: Request, res: Response) => {
+  const { skill } = req.body as { skill?: string };
+  if (!skill || !ACTIVE_SKILL_TYPES.includes(skill as ActiveSkillType)) {
+    res.status(400).json({ error: "Invalid skill" });
+    return;
+  }
+  try {
+    const { coins, payload } = await upgradePlayerSkill(req.auth!.playerId, skill as ActiveSkillType);
+    res.json({ success: true, coins, ...payload });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Upgrade failed" });
   }
 });
 

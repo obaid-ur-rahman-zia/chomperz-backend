@@ -13,6 +13,8 @@ import playersRoutes from "./routes/players";
 export function createApp(ensureDb: () => Promise<void>): express.Application {
   const app = express();
   const webUrl = process.env.WEB_URL || "http://localhost:3000";
+  const rateLimitWindowMs = Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000);
+  const rateLimitMax = Number(process.env.RATE_LIMIT_MAX ?? 10_000);
   const extraOrigins = (process.env.ALLOWED_ORIGINS || "")
     .split(",")
     .map((o) => o.trim())
@@ -36,10 +38,12 @@ export function createApp(ensureDb: () => Promise<void>): express.Application {
   app.use(cookieParser());
   app.use(
     rateLimit({
-      windowMs: 60 * 1000,
-      max: 120,
+      windowMs: Number.isFinite(rateLimitWindowMs) ? rateLimitWindowMs : 60_000,
+      max: Number.isFinite(rateLimitMax) ? rateLimitMax : 10_000,
       standardHeaders: true,
       legacyHeaders: false,
+      skip: (req) => req.path === "/api/health" || req.path.startsWith("/api/webhooks"),
+      message: { error: "Too Many Requests" },
     })
   );
 
